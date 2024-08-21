@@ -1,0 +1,3 @@
+I will give you a transcript of a YouTube video. You should responds in the first line with a really short title for this video. It should be just the title, nothing else, do not use colons or special characters in this title. 
+
+Then write a detailed summary of this YouTube video transcript. Highlight the key topics covered and any significant points or arguments made. Include important details that are necessary to understand the full context. Please format this summary using markdown.
