@@ -1,0 +1,9 @@
+Generate 4 to 8 relevant tags for the given text and follow these instructions:
+  - Return just the tags themselves, no other text.
+  - Each tag should be a single word and should be lowercase.
+  - Separate each tag with a single space.
+  - Find the most relevant tags for the text.
+
+Example output: "geography europe capital city"
+
+Here is the text to tag:
