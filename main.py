@@ -4,11 +4,13 @@ import json
 import logging
 import os
 import re
+import subprocess
+import time
 from email.header import decode_header
 
 import requests
-import urllib3
 from dotenv import load_dotenv
+from googleapiclient.discovery import build
 from openai import OpenAI
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import TextFormatter
@@ -21,7 +23,9 @@ IMAP_SERVER = os.getenv("IMAP_SERVER")
 EMAIL = os.getenv("EMAIL")
 PASSWORD = os.getenv("PASSWORD")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+YOUTUBE_DATA_API_KEY = os.getenv("YOUTUBE_DATA_API_KEY")
 ANKI_CONNECT_URL = os.getenv("ANKI_CONNECT_URL")
+ANKI_API_KEY = os.getenv("ANKI_API_KEY")
 
 # Create an instance of the OpenAI client
 OPENAI_CLIENT = OpenAI(api_key=OPENAI_API_KEY)
@@ -84,6 +88,23 @@ def check_email():
     return youtube_video_ids
 
 
+def get_youtube_video_details(video_id):
+    # Initialize the YouTube API client
+    youtube = build("youtube", "v3", developerKey=YOUTUBE_DATA_API_KEY)
+
+    # Make the API request
+    request = youtube.videos().list(part="snippet", id=video_id)
+    response = request.execute()
+
+    # Extract video title and channel name
+    if "items" in response and len(response["items"]) > 0:
+        video_title = response["items"][0]["snippet"]["title"]
+        channel_name = response["items"][0]["snippet"]["channelTitle"]
+        return video_title, channel_name
+    else:
+        return None, None
+
+
 def extract_transcript_from_youtube(video_id):
     # Get the transcript for the YouTube video
     transcript = YouTubeTranscriptApi.get_transcript(video_id)
@@ -140,25 +161,21 @@ def generate_flashcards_from_summary(summary, language="english"):
     return flashcards_json
 
 
-def upload_to_anki(flashcards):
-    # Placeholder for your AnkiConnect API code
-    for card in flashcards:
-        requests.post(
-            ANKI_CONNECT_URL,
-            json={
-                "action": "addNote",
-                "version": 6,
-                "params": {
-                    "note": {
-                        "deckName": "YouTube Flashcards",
-                        "modelName": "Basic",
-                        "fields": {"Front": card["question"], "Back": card["answer"]},
-                        "options": {"allowDuplicate": False},
-                        "tags": [],
-                    }
-                },
-            },
-        )
+def generate_tags(text):
+    """Query OpenAI API to generate tags from the text."""
+    with open("prompts/tags_generation.txt", "r") as file:
+        prompt = file.read().strip()
+
+    tags_prompt = f"{prompt}\n\n{text}"
+
+    # Call the OpenAI API to generate tags
+    tags_response = openai_call(tags_prompt)
+    print(tags_response)
+
+    # Convert the response to a list of tags
+    tags = tags_response.split(" ")
+
+    return tags
 
 
 def save_to_file(content: str, path: str = ""):
@@ -176,34 +193,40 @@ def save_to_file(content: str, path: str = ""):
         file.write(content)
 
 
-def anki_request(action, **params):
-    return {"action": action, "params": params, "version": 6, "key": "myankikey"}
+def deck_exists(deck_name):
+    payload = {
+        "action": "deckNames",
+        "version": 6,
+        "key": ANKI_API_KEY,
+    }
+    response = requests.post("http://localhost:8765", json=payload)
+    if response.status_code != 200:
+        raise Exception("Failed to fetch deck names from AnkiConnect")
+    deck_names = response.json().get("result", [])
+    return deck_name in deck_names
 
 
-def anki_invoke(action, **params):
-    requestJson = json.dumps(anki_request(action, **params)).encode("utf-8")
-    print("Requesting:", requestJson)
-    response = json.load(
-        urllib3.request.urlopen(
-            urllib3.request.Request("http://127.0.0.1:8765", requestJson)
-        )
-    )
-    print("Response:", response)
-    if len(response) != 2:
-        raise Exception("response has an unexpected number of fields")
-    if "error" not in response:
-        raise Exception("response is missing required error field")
-    if "result" not in response:
-        raise Exception("response is missing required result field")
-    if response["error"] is not None:
-        raise Exception(response["error"])
-    return response["result"]
+def create_deck(deck_name):
+    payload = {
+        "action": "createDeck",
+        "version": 6,
+        "params": {"deck": deck_name},
+        "key": ANKI_API_KEY,
+    }
+    response = requests.post("http://localhost:8765", json=payload)
+    if response.status_code != 200:
+        raise Exception("Failed to create deck in AnkiConnect")
 
 
 def add_anki_card(deck_name, note_type, front, back, tags=None):
+    full_deck_name = f"YouTube Flashcards::{deck_name}"
+
+    if not deck_exists(full_deck_name):
+        create_deck(full_deck_name)
+
     # Define the card note structure
     note = {
-        "deckName": deck_name,
+        "deckName": full_deck_name,
         "modelName": note_type,
         "fields": {"Front": front, "Back": back},
         "tags": tags or [],
@@ -213,12 +236,16 @@ def add_anki_card(deck_name, note_type, front, back, tags=None):
         "picture": [],
     }
 
+    send_anki_request("addNote", {"note": note})
+
+
+def send_anki_request(action, params=None):
     # Prepare the request payload
     payload = {
-        "action": "addNote",
+        "action": action,
         "version": 6,
-        "params": {"note": note},
-        "key": "myankikey",
+        "params": params or {},
+        "key": ANKI_API_KEY,
     }
 
     # Send the request to AnkiConnect
@@ -227,31 +254,58 @@ def add_anki_card(deck_name, note_type, front, back, tags=None):
     # Check the response
     if response.status_code == 200:
         result = response.json()
-        if "error" in result and result["error"] is None:
-            print("Card added successfully!")
-        else:
-            print(f"Error adding card: {result['error']}")
+        if not ("error" in result and result["error"] is None):
+            print(f"Error syncing media: {result['error']}")
     else:
         print(f"HTTP Error: {response.status_code}")
 
 
 def main():
+    # Check email for unread YouTube links
     video_ids = check_email()
+
+    # Open Anki
+    with open("anki_output.log", "w") as f:
+        anki_process = subprocess.Popen(["anki"], stdout=f, stderr=f)
+    # anki_process = subprocess.Popen(["anki"])
+    # Give Anki some time to start up
+    time.sleep(5)
+
     # video_ids = ["pmOi0crbkEE"]
     for video_id in video_ids:
+        print(f"\nProcessing video with ID: {video_id}")
+        # Get the title and channel name of the YouTube video
+        video_title, channel_name = get_youtube_video_details(video_id)
+        print(f"Channel name: {channel_name}")
+        print(f"Video title: {video_title}")
         # Get the transcript for the YouTube video
         transcript = extract_transcript_from_youtube(video_id)
         # Get the summary of the transcript
         summarized_transcript = summarize_transcript(transcript)
         # Save the summarized transcript to a file
-        save_to_file(summarized_transcript)
+        save_to_file(summarized_transcript, "summaries")
         # Generate flashcards from the summarized transcript
         flashcards = generate_flashcards_from_summary(summarized_transcript)
+        print(f"Created {len(flashcards)} flashcards for the video.")
+
+        # Generate tags for the flashcards
+        tags = generate_tags(summarized_transcript)
+        print(f"Generated {len(tags)} tags: {tags}.")
+
         # Upload the flashcards to Anki
         for card in flashcards:
-            add_anki_card(
-                "YouTube Flashcards", "Basic", card["question"], card["answer"]
+            # Add channel name and video title as a header to the card
+            front = (
+                f"<h1>{channel_name}</h1><h2>{video_title}</h2><br>{card['question']}"
             )
+            add_anki_card(channel_name, "Basic", front, card["answer"], tags=tags)
+        print("Uploaded flashcards to Anki.")
+
+    # Sync the media files with Anki
+    send_anki_request("sync")
+    print("\nSynce completed!")
+    # Close Anki
+    anki_process.kill()
 
 
 if __name__ == "__main__":
