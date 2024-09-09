@@ -9,9 +9,9 @@ Create as much as needed flash cards following these rules:
 - Write in english
 - The json key for the question should be "question" and for the answer should be "answer"
 - The json should be a list of dictionaries, each dictionary should have a question and an answer key
-- Create 4 to 10 flashcards. Opt for 4 if the text is not too long, and 10 if the text is long.
 - Make sure that they are high level questions, focusing on the big picture and not on the details
 - The goal is to retain the information for a long term learning objective.
+- Create 4 to 8 flashcards. Try to generate the fewest amount of flashcards that will help the user learn the content.
 
 Here is an example of how the json should look like:
 [
