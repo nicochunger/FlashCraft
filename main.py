@@ -1,3 +1,13 @@
+# /// script
+# dependencies = [
+#   "requests<3",
+#   "google-api-python-client",
+#   "youtube-transcript-api",
+#   "openai",
+#   "python-dotenv",
+# ]
+# ///
+
 import email
 import imaplib
 import json
@@ -30,12 +40,19 @@ ANKI_API_KEY = os.getenv("ANKI_API_KEY")
 # Create an instance of the OpenAI client
 OPENAI_CLIENT = OpenAI(api_key=OPENAI_API_KEY)
 
-# Logging configuration
-# logging.basicConfig(level=logging.INFO)
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,  # Set the logging level
+    format="%(asctime)s - %(levelname)s - %(message)s",  # Log format
+)
 
 
 def check_email():
-    # Log the start of the email checking process
+    """Check the email inbox for unread emails containing YouTube links.
+
+    Returns:
+        list: A list of YouTube video IDs extracted from unread emails.
+    """
     logging.info("Checking email for YouTube links...")
 
     # Connect to the email server
@@ -46,8 +63,6 @@ def check_email():
     # Search for all unread emails
     status, messages = mail.search(None, "UNSEEN")
     email_ids = messages[0].split()
-
-    logging.info(f"Found {len(email_ids)} unread emails.")
 
     # Pattern to extract YouTube video ID from either full URL or shortened URL
     pattern = (
@@ -82,13 +97,21 @@ def check_email():
     mail.close()
     mail.logout()
 
-    print(
+    logging.info(
         f"Found {len(email_ids)} unread emails with {len(youtube_video_ids)} YouTube links."
     )
     return youtube_video_ids
 
 
 def get_youtube_video_details(video_id):
+    """Fetch the title and channel name of a YouTube video by its ID.
+
+    Args:
+        video_id (str): The ID of the YouTube video.
+
+    Returns:
+        tuple: A tuple containing the video title and channel name, or (None, None) if not found.
+    """
     # Initialize the YouTube API client
     youtube = build("youtube", "v3", developerKey=YOUTUBE_DATA_API_KEY)
 
@@ -106,6 +129,14 @@ def get_youtube_video_details(video_id):
 
 
 def extract_transcript_from_youtube(video_id):
+    """Extract the transcript from a YouTube video.
+
+    Args:
+        video_id (str): The ID of the YouTube video.
+
+    Returns:
+        str: The formatted transcript of the video as plain text.
+    """
     # Get the transcript for the YouTube video
     transcript = YouTubeTranscriptApi.get_transcript(video_id)
     # Format the transcript as plain text
@@ -115,6 +146,15 @@ def extract_transcript_from_youtube(video_id):
 
 
 def openai_call(prompt, model="gpt-4o-mini"):
+    """Call the OpenAI API with a given prompt.
+
+    Args:
+        prompt (str): The prompt to send to the OpenAI API.
+        model (str): The model to use for the API call.
+
+    Returns:
+        str: The response content from the OpenAI API.
+    """
     chat_completion = OPENAI_CLIENT.chat.completions.create(
         messages=[
             {
@@ -129,6 +169,14 @@ def openai_call(prompt, model="gpt-4o-mini"):
 
 
 def summarize_transcript(transcript):
+    """Summarize a YouTube video transcript using the OpenAI API.
+
+    Args:
+        transcript (str): The transcript of the YouTube video.
+
+    Returns:
+        str: The summary of the transcript.
+    """
     logging.info("Summarizing the YouTube video transcript with OpenAI API...")
 
     # Define the prompt with the preparatory instruction and append the transcript
@@ -144,6 +192,15 @@ def summarize_transcript(transcript):
 
 
 def generate_flashcards_from_summary(summary, language="english"):
+    """Generate flashcards from a summarized transcript.
+
+    Args:
+        summary (str): The summarized transcript.
+        language (str): The language for the flashcards.
+
+    Returns:
+        dict: A JSON object containing the generated flashcards.
+    """
     logging.info("Generating flashcards from the summarized transcript...")
 
     with open("prompts/flashcard_generation.txt", "r") as file:
@@ -162,7 +219,14 @@ def generate_flashcards_from_summary(summary, language="english"):
 
 
 def generate_tags(text):
-    """Query OpenAI API to generate tags from the text."""
+    """Generate tags from a given text using the OpenAI API.
+
+    Args:
+        text (str): The text to generate tags from.
+
+    Returns:
+        list: A list of generated tags.
+    """
     with open("prompts/tags_generation.txt", "r") as file:
         prompt = file.read().strip()
 
@@ -179,6 +243,12 @@ def generate_tags(text):
 
 
 def save_to_file(content: str, path: str = ""):
+    """Save content to a file with a title derived from the content.
+
+    Args:
+        content (str): The content to save.
+        path (str): The directory path to save the file in.
+    """
     # Save the summarized transcript to a file
     # Get the title from first line
     title = (
@@ -194,6 +264,14 @@ def save_to_file(content: str, path: str = ""):
 
 
 def deck_exists(deck_name):
+    """Check if a specified Anki deck exists.
+
+    Args:
+        deck_name (str): The name of the deck to check.
+
+    Returns:
+        bool: True if the deck exists, False otherwise.
+    """
     payload = {
         "action": "deckNames",
         "version": 6,
@@ -207,6 +285,11 @@ def deck_exists(deck_name):
 
 
 def create_deck(deck_name):
+    """Create a new Anki deck.
+
+    Args:
+        deck_name (str): The name of the deck to create.
+    """
     payload = {
         "action": "createDeck",
         "version": 6,
@@ -219,6 +302,15 @@ def create_deck(deck_name):
 
 
 def add_anki_card(deck_name, note_type, front, back, tags=None):
+    """Add a new card to an Anki deck.
+
+    Args:
+        deck_name (str): The name of the deck to add the card to.
+        note_type (str): The type of the note (card).
+        front (str): The front content of the card.
+        back (str): The back content of the card.
+        tags (list, optional): A list of tags for the card.
+    """
     full_deck_name = f"YouTube Flashcards::{deck_name}"
 
     if not deck_exists(full_deck_name):
@@ -240,6 +332,12 @@ def add_anki_card(deck_name, note_type, front, back, tags=None):
 
 
 def send_anki_request(action, params=None):
+    """Send a request to AnkiConnect.
+
+    Args:
+        action (str): The action to perform.
+        params (dict, optional): The parameters for the action.
+    """
     # Prepare the request payload
     payload = {
         "action": action,
@@ -261,23 +359,29 @@ def send_anki_request(action, params=None):
 
 
 def main():
+    """Main function to execute the application logic."""
     # Check email for unread YouTube links
     video_ids = check_email()
+    if not video_ids:
+        logging.info("No new YouTube links found.")
+        return
 
     # Open Anki
     with open("anki_output.log", "w") as f:
         anki_process = subprocess.Popen(["anki"], stdout=f, stderr=f)
-    # anki_process = subprocess.Popen(["anki"])
     # Give Anki some time to start up
     time.sleep(5)
+    # Sync Anki
+    send_anki_request("sync")
 
     # video_ids = ["pmOi0crbkEE"]
     for video_id in video_ids:
-        print(f"\nProcessing video with ID: {video_id}")
+        logging.info("----------------------------------")
+        logging.info(f"Processing video with ID: {video_id}")
         # Get the title and channel name of the YouTube video
         video_title, channel_name = get_youtube_video_details(video_id)
-        print(f"Channel name: {channel_name}")
-        print(f"Video title: {video_title}")
+        logging.info(f"Channel name: {channel_name}")
+        logging.info(f"Video title: {video_title}")
         # Get the transcript for the YouTube video
         transcript = extract_transcript_from_youtube(video_id)
         # Get the summary of the transcript
@@ -286,11 +390,11 @@ def main():
         save_to_file(summarized_transcript, "summaries")
         # Generate flashcards from the summarized transcript
         flashcards = generate_flashcards_from_summary(summarized_transcript)
-        print(f"Created {len(flashcards)} flashcards for the video.")
+        logging.info(f"Created {len(flashcards)} flashcards for the video.")
 
         # Generate tags for the flashcards
         tags = generate_tags(summarized_transcript)
-        print(f"Generated {len(tags)} tags: {tags}.")
+        logging.info(f"Generated {len(tags)} tags: {tags}.")
 
         # Upload the flashcards to Anki
         for card in flashcards:
@@ -299,11 +403,11 @@ def main():
                 f"<h1>{channel_name}</h1><h2>{video_title}</h2><br>{card['question']}"
             )
             add_anki_card(channel_name, "Basic", front, card["answer"], tags=tags)
-        print("Uploaded flashcards to Anki.")
+        logging.info("Uploaded flashcards to Anki.")
 
     # Sync the media files with Anki
     send_anki_request("sync")
-    print("\nSynce completed!")
+    logging.info("Sync completed!")
     # Close Anki
     anki_process.kill()
 
