@@ -100,7 +100,15 @@ def check_email():
     logging.info(
         f"Found {len(email_ids)} unread emails with {len(youtube_video_ids)} YouTube links."
     )
-    return youtube_video_ids
+    # Remove duplicate video IDs
+    unique_youtube_video_ids = list(set(youtube_video_ids))
+
+    # If there were duplicate video IDs, log the number of duplicates removed
+    if len(unique_youtube_video_ids) < len(youtube_video_ids):
+        logging.info(
+            f"Removed {len(youtube_video_ids) - len(unique_youtube_video_ids)} duplicate video IDs."
+        )
+    return unique_youtube_video_ids
 
 
 def get_youtube_video_details(video_id):
