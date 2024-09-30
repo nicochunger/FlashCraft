@@ -8,6 +8,8 @@
 # ]
 # ///
 
+## NEW NAME: FlashCraft
+
 import email
 import imaplib
 import json
