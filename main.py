@@ -10,6 +10,7 @@
 
 ## NEW NAME: FlashCraft
 
+import argparse
 import email
 import imaplib
 import json
@@ -21,6 +22,7 @@ import time
 from email.header import decode_header
 
 import requests
+import tiktoken
 from dotenv import load_dotenv
 from googleapiclient.discovery import build
 from openai import OpenAI
@@ -29,7 +31,6 @@ from youtube_transcript_api.formatters import TextFormatter
 
 # Load environment variables from .env file
 load_dotenv(".env")
-
 # Get environment variables
 IMAP_SERVER = os.getenv("IMAP_SERVER")
 EMAIL = os.getenv("EMAIL")
@@ -38,6 +39,21 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 YOUTUBE_DATA_API_KEY = os.getenv("YOUTUBE_DATA_API_KEY")
 ANKI_CONNECT_URL = os.getenv("ANKI_CONNECT_URL")
 ANKI_API_KEY = os.getenv("ANKI_API_KEY")
+
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description="FlashCraft: Generate flashcards content.")
+parser.add_argument(
+    "-m",
+    "--model",
+    type=str,
+    default="gpt-4o",
+    help="The LLM model to use for OpenAI API calls.",
+    choices=["gpt-4o", "gpt-4o-mini"],
+)
+args = parser.parse_args()
+
+# Use the model argument in the openai_call function
+LLM_MODEL = args.model
 
 # Create an instance of the OpenAI client
 OPENAI_CLIENT = OpenAI(api_key=OPENAI_API_KEY)
@@ -155,7 +171,7 @@ def extract_transcript_from_youtube(video_id):
     return formatted_transcript.replace("\n", " ")
 
 
-def openai_call(prompt, model="gpt-4o-mini"):
+def openai_call(prompt, model=LLM_MODEL):
     """Call the OpenAI API with a given prompt.
 
     Args:
@@ -201,11 +217,11 @@ def summarize_transcript(transcript):
     return message
 
 
-def generate_flashcards_from_summary(summary, language="english"):
-    """Generate flashcards from a summarized transcript.
+def generate_flashcards(text, language="english"):
+    """Generate flashcards from a text.
 
     Args:
-        summary (str): The summarized transcript.
+        text (str): The input text.
         language (str): The language for the flashcards.
 
     Returns:
@@ -216,10 +232,27 @@ def generate_flashcards_from_summary(summary, language="english"):
     with open("prompts/flashcard_generation.txt", "r") as file:
         prompt = file.read().strip()
 
-    flashcards_prompt = f"{prompt}\n\n{summary}"
+    flashcards_prompt = f"{prompt}\n\n{text}"
 
-    # Call the OpenAI API to generate flashcards
-    flashcards = openai_call(flashcards_prompt)
+    # Count the number of tokens in the flashcards_prompt
+    num_tokens = len(flashcards_prompt.split())
+
+    encoding = tiktoken.encoding_for_model(LLM_MODEL)
+    num_tokens = len(encoding.encode(flashcards_prompt))
+
+    # Check if the number of tokens exceeds 200000 and the model is gpt-4o
+    if num_tokens > 200000 and LLM_MODEL == "gpt-4o":
+        model_to_use = "gpt-4o-mini"
+    else:
+        model_to_use = LLM_MODEL
+
+    # Call the OpenAI API to generate flashcards with the appropriate model
+    flashcards = openai_call(flashcards_prompt, model=model_to_use)
+
+    # Clean the output
+    flashcards = (
+        flashcards.replace("```json\n", "").replace("```", "").replace("\n", "").strip()
+    )
 
     # Convert to json
     flashcards_json = json.loads(flashcards)
@@ -357,7 +390,7 @@ def send_anki_request(action, params=None):
     }
 
     # Send the request to AnkiConnect
-    response = requests.post("http://localhost:8765", json=payload)
+    response = requests.post(ANKI_CONNECT_URL, json=payload)
 
     # Check the response
     if response.status_code == 200:
@@ -379,8 +412,26 @@ def main():
     # Open Anki
     with open("anki_output.log", "w") as f:
         anki_process = subprocess.Popen(["anki"], stdout=f, stderr=f)
-    # Give Anki some time to start up
-    time.sleep(5)
+
+    # Wait for Anki to be ready
+    start_time = time.time()
+    while time.time() - start_time < 30:  # Maximum wait time of 30 seconds
+        try:
+            response = requests.post(
+                ANKI_CONNECT_URL, json={"action": "version", "version": 6}, timeout=5
+            )
+            if response.status_code == 200:
+                break
+        except requests.RequestException:
+            pass
+        time.sleep(1)  # Check every 1 second
+
+    if time.time() - start_time >= 30:
+        logging.error("Anki is not responding.")
+        anki_process.kill()
+        return
+
+    logging.info("Anki is ready.")
     # Sync Anki
     send_anki_request("sync")
 
@@ -394,16 +445,19 @@ def main():
         logging.info(f"Video title: {video_title}")
         # Get the transcript for the YouTube video
         transcript = extract_transcript_from_youtube(video_id)
+
         # Get the summary of the transcript
-        summarized_transcript = summarize_transcript(transcript)
+        # summarized_transcript = summarize_transcript(transcript)
         # Save the summarized transcript to a file
-        save_to_file(summarized_transcript, "summaries")
-        # Generate flashcards from the summarized transcript
-        flashcards = generate_flashcards_from_summary(summarized_transcript)
+        # save_to_file(summarized_transcript, "summaries")
+
+        # Generate flashcards from the transcript
+        flashcards = generate_flashcards(transcript)
+        print(flashcards)
         logging.info(f"Created {len(flashcards)} flashcards for the video.")
 
         # Generate tags for the flashcards
-        tags = generate_tags(summarized_transcript)
+        tags = generate_tags(flashcards)
         logging.info(f"Generated {len(tags)} tags: {tags}.")
 
         # Upload the flashcards to Anki
