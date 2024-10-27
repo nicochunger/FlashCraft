@@ -22,7 +22,7 @@ Accuracy: Do not invent any information; use only content from the text.
 
 Educational Objective: The goal is to help the user retain information for long-term learning.
 
-Language: Write all content in English.
+Language: Write all content in [LANGUAGE].
 
 Here is an example of how the JSON should look:
 

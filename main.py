@@ -234,6 +234,9 @@ def generate_flashcards(text, language="english"):
 
     flashcards_prompt = f"{prompt}\n\n{text}"
 
+    # Insert the selected language into the prompt
+    flashcards_prompt = flashcards_prompt.replace("[LANGUAGE]", language)
+
     # Count the number of tokens in the flashcards_prompt
     num_tokens = len(flashcards_prompt.split())
 
@@ -455,6 +458,11 @@ def main():
         flashcards = generate_flashcards(transcript)
         print(flashcards)
         logging.info(f"Created {len(flashcards)} flashcards for the video.")
+
+        # TODO An idea I had is to here do a second pass on the flashcards to make sure that the
+        # questions are not repeated or that no information is overlapped between questions which
+        # sometimes happens. Prompt GPT4 again with the flashcards and ask it to check for repeated
+        # information and modify them to keep the essential information.
 
         # Generate tags for the flashcards
         tags = generate_tags(flashcards)
