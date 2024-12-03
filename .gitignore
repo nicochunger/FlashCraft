@@ -169,3 +169,4 @@ cython_debug/
 summaries/
 transcripts/
 *.mp3
+books/
