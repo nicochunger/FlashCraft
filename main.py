@@ -242,9 +242,10 @@ def generate_flashcards(text, language="english"):
 
     encoding = tiktoken.encoding_for_model(LLM_MODEL)
     num_tokens = len(encoding.encode(flashcards_prompt))
+    logging.info(f"Number of tokens: {num_tokens}")
 
     # Check if the number of tokens exceeds 200000 and the model is gpt-4o
-    if num_tokens > 200000 and LLM_MODEL == "gpt-4o":
+    if num_tokens > 30_000 and LLM_MODEL == "gpt-4o":
         model_to_use = "gpt-4o-mini"
     else:
         model_to_use = LLM_MODEL
