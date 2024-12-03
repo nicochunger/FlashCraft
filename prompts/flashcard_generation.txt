@@ -24,6 +24,8 @@ Educational Objective: The goal is to help the user retain information for long-
 
 Language: Write all content in [LANGUAGE].
 
+Ignore Sponsorship: Disregard any promotional content or sponsorships in the text.
+
 Here is an example of how the JSON should look:
 
 [
