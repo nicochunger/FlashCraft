@@ -15,19 +15,24 @@ import email
 import imaplib
 import json
 import logging
+import math
 import os
 import re
 import subprocess
 import time
 from email.header import decode_header
 
+import json_repair
 import requests
 import tiktoken
 from dotenv import load_dotenv
-from googleapiclient.discovery import build
 from openai import OpenAI
-from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api.formatters import TextFormatter
+
+from content_types.books import process_book_attachment
+from content_types.youtube import (
+    extract_transcript_from_youtube,
+    get_youtube_video_details,
+)
 
 # Load environment variables from .env file
 load_dotenv(".env")
@@ -66,12 +71,14 @@ logging.basicConfig(
 
 
 def check_email():
-    """Check the email inbox for unread emails containing YouTube links.
+    """Check the email inbox for unread emails containing YouTube links or book attachments.
 
     Returns:
-        list: A list of YouTube video IDs extracted from unread emails.
+        dict: A dictionary with keys 'youtube' and 'books'.
+            'youtube' is a list of YouTube video IDs extracted from unread emails.
+            'books' is a list of file paths to downloaded .epub or .mobi files.
     """
-    logging.info("Checking email for YouTube links...")
+    logging.info("Checking email for content...")
 
     # Connect to the email server
     mail = imaplib.IMAP4_SSL(IMAP_SERVER)
@@ -88,6 +95,7 @@ def check_email():
     )
 
     youtube_video_ids = []
+    book_file_paths = []
 
     for email_id in email_ids:
         # Fetch the email by ID
@@ -99,13 +107,25 @@ def check_email():
         if isinstance(subject, bytes):
             subject = subject.decode(encoding if encoding else "utf-8")
 
-        # Check if the email contains a YouTube link
+        # Check if the email contains a YouTube link or book attachments
         if msg.is_multipart():
             for part in msg.walk():
-                if part.get_content_type() == "text/plain":
+                content_type = part.get_content_type()
+                if content_type == "text/plain":
                     body = part.get_payload(decode=True).decode()
                     video_ids = re.findall(pattern, body)
                     youtube_video_ids.extend(video_ids)
+                elif (
+                    part.get_content_maintype() == "application" and part.get_filename()
+                ):
+                    filename = part.get_filename()
+                    if filename.endswith((".epub", ".mobi")):
+                        filepath = os.path.join("downloads", filename)
+                        if not os.path.exists("downloads"):
+                            os.makedirs("downloads")
+                        with open(filepath, "wb") as f:
+                            f.write(part.get_payload(decode=True))
+                        book_file_paths.append(filepath)
         else:
             body = msg.get_payload(decode=True).decode()
             video_ids = re.findall(pattern, body)
@@ -116,7 +136,7 @@ def check_email():
     mail.logout()
 
     logging.info(
-        f"Found {len(email_ids)} unread emails with {len(youtube_video_ids)} YouTube links."
+        f"Found {len(email_ids)} unread emails with:\n\t{len(youtube_video_ids)} YouTube links.\n\t{len(book_file_paths)} books."
     )
     # Remove duplicate video IDs
     unique_youtube_video_ids = list(set(youtube_video_ids))
@@ -126,49 +146,7 @@ def check_email():
         logging.info(
             f"Removed {len(youtube_video_ids) - len(unique_youtube_video_ids)} duplicate video IDs."
         )
-    return unique_youtube_video_ids
-
-
-def get_youtube_video_details(video_id):
-    """Fetch the title and channel name of a YouTube video by its ID.
-
-    Args:
-        video_id (str): The ID of the YouTube video.
-
-    Returns:
-        tuple: A tuple containing the video title and channel name, or (None, None) if not found.
-    """
-    # Initialize the YouTube API client
-    youtube = build("youtube", "v3", developerKey=YOUTUBE_DATA_API_KEY)
-
-    # Make the API request
-    request = youtube.videos().list(part="snippet", id=video_id)
-    response = request.execute()
-
-    # Extract video title and channel name
-    if "items" in response and len(response["items"]) > 0:
-        video_title = response["items"][0]["snippet"]["title"]
-        channel_name = response["items"][0]["snippet"]["channelTitle"]
-        return video_title, channel_name
-    else:
-        return None, None
-
-
-def extract_transcript_from_youtube(video_id):
-    """Extract the transcript from a YouTube video.
-
-    Args:
-        video_id (str): The ID of the YouTube video.
-
-    Returns:
-        str: The formatted transcript of the video as plain text.
-    """
-    # Get the transcript for the YouTube video
-    transcript = YouTubeTranscriptApi.get_transcript(video_id)
-    # Format the transcript as plain text
-    formatted_transcript = TextFormatter().format_transcript(transcript)
-    # Remove newlines from the formatted transcript and return it
-    return formatted_transcript.replace("\n", " ")
+    return {"youtube": unique_youtube_video_ids, "books": book_file_paths}
 
 
 def openai_call(prompt, model=LLM_MODEL):
@@ -217,6 +195,18 @@ def summarize_transcript(transcript):
     return message
 
 
+def calc_num_questions(num_tokens):
+    """Calculate the number of questions to generate based on the number of tokens.
+
+    Args:
+        num_tokens (int): The number of tokens in the text.
+
+    Returns:
+        int: The number of questions to generate.
+    """
+    return round(math.sqrt(num_tokens) / 25)
+
+
 def generate_flashcards(text, language="english"):
     """Generate flashcards from a text.
 
@@ -227,7 +217,7 @@ def generate_flashcards(text, language="english"):
     Returns:
         dict: A JSON object containing the generated flashcards.
     """
-    logging.info("Generating flashcards from the summarized transcript...")
+    logging.info("Generating flashcards from the input text...")
 
     with open("prompts/flashcard_generation.txt", "r") as file:
         prompt = file.read().strip()
@@ -244,14 +234,17 @@ def generate_flashcards(text, language="english"):
     num_tokens = len(encoding.encode(flashcards_prompt))
     logging.info(f"Number of tokens: {num_tokens}")
 
-    # Check if the number of tokens exceeds 200000 and the model is gpt-4o
-    if num_tokens > 30_000 and LLM_MODEL == "gpt-4o":
-        model_to_use = "gpt-4o-mini"
-    else:
-        model_to_use = LLM_MODEL
+    # Check if the number of tokens exceeds 200000 (limit for gpt-4o-mini)
+    if num_tokens > 200_000:
+        logging.error("The number of tokens exceeds the limit for the selected model.")
+
+    # Adjust number of questions based on the number of tokens
+    num_questions = calc_num_questions(num_tokens)
+    logging.info(f"Number of questions to generate: {num_questions}")
+    flashcards_prompt = flashcards_prompt.replace("[NUM_QUESTIONS]", str(num_questions))
 
     # Call the OpenAI API to generate flashcards with the appropriate model
-    flashcards = openai_call(flashcards_prompt, model=model_to_use)
+    flashcards = openai_call(flashcards_prompt, model="gpt-4o-mini")
 
     # Clean the output
     flashcards = (
@@ -263,6 +256,21 @@ def generate_flashcards(text, language="english"):
 
     # Placeholder for your OpenAI API code to generate flashcards
     return flashcards_json
+
+
+def process_flashcards(flashcards):
+    """Process the generated flashcards. It send them to gpt-4o for verification and correction.
+    It ensures that the questions are not repeated and that no information is overlapped between questions.
+    It also makes sure that the essential information is kept.
+
+    Args:
+        flashcards (dict): The generated flashcards.
+
+    Returns:
+        dict: The processed flashcards.
+    """
+    # TODO Placeholder for your code to process the flashcards
+    return flashcards
 
 
 def generate_tags(text):
@@ -358,14 +366,13 @@ def add_anki_card(deck_name, note_type, front, back, tags=None):
         back (str): The back content of the card.
         tags (list, optional): A list of tags for the card.
     """
-    full_deck_name = f"YouTube Flashcards::{deck_name}"
 
-    if not deck_exists(full_deck_name):
-        create_deck(full_deck_name)
+    if not deck_exists(deck_name):
+        create_deck(deck_name)
 
     # Define the card note structure
     note = {
-        "deckName": full_deck_name,
+        "deckName": deck_name,
         "modelName": note_type,
         "fields": {"Front": front, "Back": back},
         "tags": tags or [],
@@ -407,10 +414,13 @@ def send_anki_request(action, params=None):
 
 def main():
     """Main function to execute the application logic."""
-    # Check email for unread YouTube links
-    video_ids = check_email()
-    if not video_ids:
-        logging.info("No new YouTube links found.")
+    # Check email for unread YouTube links or book attachments
+    content = check_email()
+    video_ids = content.get("youtube", [])
+    books = content.get("books", [])
+
+    if not video_ids and not books:
+        logging.info("No new YouTube links or book attachments found.")
         return
 
     # Open Anki
@@ -439,44 +449,95 @@ def main():
     # Sync Anki
     send_anki_request("sync")
 
-    # video_ids = ["pmOi0crbkEE"]
-    for video_id in video_ids:
-        logging.info("----------------------------------")
-        logging.info(f"Processing video with ID: {video_id}")
-        # Get the title and channel name of the YouTube video
-        video_title, channel_name = get_youtube_video_details(video_id)
-        logging.info(f"Channel name: {channel_name}")
-        logging.info(f"Video title: {video_title}")
-        # Get the transcript for the YouTube video
-        transcript = extract_transcript_from_youtube(video_id)
+    # Process books if found
+    if books:
+        logging.info(f"Processing {len(books)} new books...")
+        for ebook_path in books:
+            try:
+                # Convert ebook to text
+                book_content = process_book_attachment(ebook_path)
 
-        # Get the summary of the transcript
-        # summarized_transcript = summarize_transcript(transcript)
-        # Save the summarized transcript to a file
-        # save_to_file(summarized_transcript, "summaries")
+                # Generate flashcards from the text
+                flashcards = generate_flashcards(book_content)
+                logging.info(f"Created {len(flashcards)} flashcards from the book.")
 
-        # Generate flashcards from the transcript
-        flashcards = generate_flashcards(transcript)
-        print(flashcards)
-        logging.info(f"Created {len(flashcards)} flashcards for the video.")
+                # Generate tags for the flashcards
+                tags = generate_tags(flashcards)
+                logging.info(f"Generated tags: {tags}.")
 
-        # TODO An idea I had is to here do a second pass on the flashcards to make sure that the
-        # questions are not repeated or that no information is overlapped between questions which
-        # sometimes happens. Prompt GPT4 again with the flashcards and ask it to check for repeated
-        # information and modify them to keep the essential information.
+                # Use the book filename to infer the author and title
+                author_name = openai_call(
+                    f"Return just the author name of the book inferred from this filename: {ebook_path}. The answer should ONLY contain the name of the author and nothing else.",
+                    model="gpt-4o-mini",
+                )
+                logging.info(f"Author name: {author_name}")
+                book_title = openai_call(
+                    f"Return just the title of the book inferred from this filename: {ebook_path}. The answer should ONLY contain the name of the book and nothing else.",
+                    model="gpt-4o-mini",
+                )
+                logging.info(f"Book title: {book_title}")
 
-        # Generate tags for the flashcards
-        tags = generate_tags(flashcards)
-        logging.info(f"Generated {len(tags)} tags: {tags}.")
+                # Upload the flashcards to Anki
+                for card in flashcards:
+                    front = f"<h1>{author_name}</h1><h2>{book_title}</h2><br>{card['question']}"
+                    add_anki_card(
+                        f"Books::{author_name}",
+                        "Basic",
+                        front,
+                        card["answer"],
+                        tags=tags,
+                    )
+                logging.info(
+                    f"Uploaded flashcards for book '{author_name} - {book_title}' to Anki."
+                )
 
-        # Upload the flashcards to Anki
-        for card in flashcards:
-            # Add channel name and video title as a header to the card
-            front = (
-                f"<h1>{channel_name}</h1><h2>{video_title}</h2><br>{card['question']}"
-            )
-            add_anki_card(channel_name, "Basic", front, card["answer"], tags=tags)
-        logging.info("Uploaded flashcards to Anki.")
+            except Exception as e:
+                logging.error(f"Error processing book '{ebook_path}': {e}")
+
+    # Process YouTube videos if found
+    if video_ids:
+        logging.info(f"Processing {len(video_ids)} YouTube videos...")
+        for video_id in video_ids:
+            logging.info("----------------------------------")
+            logging.info(f"Processing video with ID: {video_id}")
+            # Get the title and channel name of the YouTube video
+            video_title, channel_name = get_youtube_video_details(video_id)
+            logging.info(f"Channel name: {channel_name}")
+            logging.info(f"Video title: {video_title}")
+            # Get the transcript for the YouTube video
+            transcript = extract_transcript_from_youtube(video_id)
+
+            # Get the summary of the transcript
+            # summarized_transcript = summarize_transcript(transcript)
+            # Save the summarized transcript to a file
+            # save_to_file(summarized_transcript, "summaries")
+
+            # Generate flashcards from the transcript
+            flashcards = generate_flashcards(transcript)
+            print(flashcards)
+            logging.info(f"Created {len(flashcards)} flashcards for the video.")
+
+            # TODO An idea I had is to here do a second pass on the flashcards to make sure that the
+            # questions are not repeated or that no information is overlapped between questions which
+            # sometimes happens. Prompt GPT4 again with the flashcards and ask it to check for repeated
+            # information and modify them to keep the essential information.
+
+            # Generate tags for the flashcards
+            tags = generate_tags(flashcards)
+            logging.info(f"Generated {len(tags)} tags: {tags}.")
+
+            # Upload the flashcards to Anki
+            for card in flashcards:
+                # Add channel name and video title as a header to the card
+                front = f"<h1>{channel_name}</h1><h2>{video_title}</h2><br>{card['question']}"
+                add_anki_card(
+                    f"YouTube::{channel_name}",
+                    "Basic",
+                    front,
+                    card["answer"],
+                    tags=tags,
+                )
+            logging.info("Uploaded flashcards to Anki.")
 
     # Sync the media files with Anki
     send_anki_request("sync")
