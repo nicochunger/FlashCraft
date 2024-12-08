@@ -69,6 +69,35 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",  # Log format
 )
 
+# Define the list of supported ebook file extensions
+# SUPPORTED_TEXT_FILE_EXTENSIONS = (
+#     ".azw",
+#     ".azw3",
+#     ".cbz",
+#     ".cbr",
+#     ".cbc",
+#     ".chm",
+#     ".docx",
+#     ".epub",
+#     ".fb2",
+#     ".html",
+#     ".htmlz",
+#     ".lit",
+#     ".lrf",
+#     ".mobi",
+#     ".odt",
+#     # ".pdf",
+#     ".pdb",
+#     ".pml",
+#     ".prc",
+#     ".rb",
+#     ".rtf",
+#     ".snb",
+#     ".tcr",
+#     ".txt",
+#     ".txtz",
+# )
+
 
 def check_email():
     """Check the email inbox for unread emails containing YouTube links or book attachments.
@@ -96,6 +125,7 @@ def check_email():
 
     youtube_video_ids = []
     book_file_paths = []
+    documents_file_paths = []
 
     for email_id in email_ids:
         # Fetch the email by ID
@@ -119,13 +149,21 @@ def check_email():
                     part.get_content_maintype() == "application" and part.get_filename()
                 ):
                     filename = part.get_filename()
-                    if filename.endswith((".epub", ".mobi")):
+                    if filename.lower().endswith(("epub", "mobi", ".pdf")):
                         filepath = os.path.join("downloads", filename)
                         if not os.path.exists("downloads"):
                             os.makedirs("downloads")
                         with open(filepath, "wb") as f:
                             f.write(part.get_payload(decode=True))
-                        book_file_paths.append(filepath)
+                        # Check if the file is a book or a document
+                        if filename.lower().endswith((".epub", ".mobi")):
+                            book_file_paths.append(filepath)
+                        else:
+                            documents_file_paths.append(filepath)
+                    else:
+                        logging.info(
+                            f"Unsupported file format for attachment: {filename}"
+                        )
         else:
             body = msg.get_payload(decode=True).decode()
             video_ids = re.findall(pattern, body)
@@ -136,7 +174,10 @@ def check_email():
     mail.logout()
 
     logging.info(
-        f"Found {len(email_ids)} unread emails with:\n\t{len(youtube_video_ids)} YouTube links.\n\t{len(book_file_paths)} books."
+        f"Found {len(email_ids)} unread emails with:"
+        f"\n\t{len(youtube_video_ids)} YouTube links."
+        f"\n\t{len(book_file_paths)} books."
+        f"\n\t{len(documents_file_paths)} documents."
     )
     # Remove duplicate video IDs
     unique_youtube_video_ids = list(set(youtube_video_ids))
@@ -146,7 +187,11 @@ def check_email():
         logging.info(
             f"Removed {len(youtube_video_ids) - len(unique_youtube_video_ids)} duplicate video IDs."
         )
-    return {"youtube": unique_youtube_video_ids, "books": book_file_paths}
+    return {
+        "youtube": unique_youtube_video_ids,
+        "books": book_file_paths,
+        "documents": documents_file_paths,
+    }
 
 
 def openai_call(prompt, model=LLM_MODEL):
@@ -412,14 +457,178 @@ def send_anki_request(action, params=None):
         print(f"HTTP Error: {response.status_code}")
 
 
+def improve_flashcards(flashcards):
+    """Improve the generated flashcards by removing duplicates and overlapping information.
+
+    Args:
+        flashcards (dict): The generated flashcards.
+
+    Returns:
+        dict: The improved flashcards.
+    """
+    # Placeholder for your code to improve the flashcards
+
+    # TODO An idea I had is to here do a second pass on the flashcards to make sure that the
+    # questions are not repeated or that no information is overlapped between questions which
+    # sometimes happens. Prompt GPT4 again with the flashcards and ask it to check for repeated
+    # information and modify them to keep the essential information.
+
+    return flashcards
+
+
+def process_youtube_videos(video_ids):
+    """Process YouTube videos by extracting the transcript, generating flashcards, and uploading them to Anki.
+
+    Args:
+        video_ids (list): The list of YouTube video IDs to process.
+    """
+    logging.info(f"Processing {len(video_ids)} YouTube videos...")
+    for video_id in video_ids:
+        logging.info("----------------------------------")
+        logging.info(f"Processing video with ID: {video_id}")
+        # Get the title and channel name of the YouTube video
+        video_title, channel_name = get_youtube_video_details(video_id)
+        logging.info(f"Channel name: {channel_name}")
+        logging.info(f"Video title: {video_title}")
+        # Get the transcript for the YouTube video
+        transcript = extract_transcript_from_youtube(video_id)
+
+        # Generate flashcards from the transcript
+        flashcards = generate_flashcards(transcript)
+        print(flashcards)
+        logging.info(f"Created {len(flashcards)} flashcards for the video.")
+
+        # Generate tags for the flashcards
+        tags = generate_tags(flashcards)
+        logging.info(f"Generated {len(tags)} tags: {tags}.")
+
+        # Upload the flashcards to Anki
+        for card in flashcards:
+            # Add channel name and video title as a header to the card
+            front = (
+                f"<h1>{channel_name}</h1><h2>{video_title}</h2><br>{card['question']}"
+            )
+            add_anki_card(
+                f"YouTube::{channel_name}",
+                "Basic",
+                front,
+                card["answer"],
+                tags=tags,
+            )
+        logging.info("Uploaded flashcards to Anki.")
+
+
+def process_books(books):
+    """
+    Process a book files by converting them to text, generating flashcards, and uploading them to Anki.
+
+    Args:
+        books (list): The list of paths to the book files.
+    """
+    logging.info(f"Processing {len(books)} new books...")
+    for ebook_path in books:
+        try:
+            # Convert ebook to text
+            book_content = process_book_attachment(ebook_path)
+
+            # Generate flashcards from the text
+            flashcards = generate_flashcards(book_content)
+            logging.info(f"Created {len(flashcards)} flashcards from the book.")
+
+            # Generate tags for the flashcards
+            tags = generate_tags(flashcards)
+            logging.info(f"Generated tags: {tags}.")
+
+            # Use the book filename to infer the author and title
+            author_name = openai_call(
+                f"Return just the author name of the book inferred from this filename: {ebook_path}. The answer should ONLY contain the name of the author and nothing else.",
+                model="gpt-4o-mini",
+            )
+            logging.info(f"Author name: {author_name}")
+            book_title = openai_call(
+                f"Return just the title of the book inferred from this filename: {ebook_path}. The answer should ONLY contain the name of the book and nothing else.",
+                model="gpt-4o-mini",
+            )
+            logging.info(f"Book title: {book_title}")
+
+            # Upload the flashcards to Anki
+            for card in flashcards:
+                front = (
+                    f"<h1>{author_name}</h1><h2>{book_title}</h2><br>{card['question']}"
+                )
+                add_anki_card(
+                    f"Books::{author_name}",
+                    "Basic",
+                    front,
+                    card["answer"],
+                    tags=tags,
+                )
+            logging.info(
+                f"Uploaded flashcards for book '{author_name} - {book_title}' to Anki."
+            )
+
+        except Exception as e:
+            logging.error(f"Error processing book '{ebook_path}': {e}")
+
+
+def process_documents(documents):
+    """
+    Process a document files by converting them to text, generating flashcards, and uploading them to Anki.
+
+    Args:
+        documents (list): The list of paths to the document files.
+    """
+    logging.info(f"Processing {len(documents)} new documents...")
+    for document_path in documents:
+        try:
+            # Convert document to text
+            text_file_path = document_path.rsplit(".", 1)[0] + ".txt"
+            subprocess.run(["pdftotext", document_path, text_file_path], check=True)
+            with open(text_file_path, "r") as file:
+                document_content = file.read()
+
+            # Generate flashcards from the text
+            flashcards = generate_flashcards(document_content)
+            logging.info(f"Created {len(flashcards)} flashcards from the document.")
+
+            # Generate tags for the flashcards
+            tags = generate_tags(flashcards)
+            logging.info(f"Generated tags: {tags}.")
+
+            # Use the document filename to infer the topic
+            topic = openai_call(
+                f"Return the topic or title of this document inferred from this filename: {document_path}."
+                f"\nAnd these flashcards:\n{flashcards}."
+                "\n\nThe answer should ONLY contain the topic or title and nothing else.",
+                model="gpt-4o-mini",
+            )
+            logging.info(f"Topic: {topic}")
+
+            # Upload the flashcards to Anki
+            for card in flashcards:
+                front = f"<h1>{topic}</h1><br>{card['question']}"
+                add_anki_card(
+                    f"Documents::{topic}",
+                    "Basic",
+                    front,
+                    card["answer"],
+                    tags=tags,
+                )
+            logging.info(f"Uploaded flashcards for document '{topic}' to Anki.")
+
+        except Exception as e:
+            logging.error(f"Error processing document '{document_path}': {e}")
+
+
 def main():
     """Main function to execute the application logic."""
     # Check email for unread YouTube links or book attachments
     content = check_email()
     video_ids = content.get("youtube", [])
     books = content.get("books", [])
+    documents = content.get("documents", [])
 
-    if not video_ids and not books:
+    if not any(content.values()):
         logging.info("No new YouTube links or book attachments found.")
         return
 
@@ -449,95 +658,17 @@ def main():
     # Sync Anki
     send_anki_request("sync")
 
-    # Process books if found
-    if books:
-        logging.info(f"Processing {len(books)} new books...")
-        for ebook_path in books:
-            try:
-                # Convert ebook to text
-                book_content = process_book_attachment(ebook_path)
-
-                # Generate flashcards from the text
-                flashcards = generate_flashcards(book_content)
-                logging.info(f"Created {len(flashcards)} flashcards from the book.")
-
-                # Generate tags for the flashcards
-                tags = generate_tags(flashcards)
-                logging.info(f"Generated tags: {tags}.")
-
-                # Use the book filename to infer the author and title
-                author_name = openai_call(
-                    f"Return just the author name of the book inferred from this filename: {ebook_path}. The answer should ONLY contain the name of the author and nothing else.",
-                    model="gpt-4o-mini",
-                )
-                logging.info(f"Author name: {author_name}")
-                book_title = openai_call(
-                    f"Return just the title of the book inferred from this filename: {ebook_path}. The answer should ONLY contain the name of the book and nothing else.",
-                    model="gpt-4o-mini",
-                )
-                logging.info(f"Book title: {book_title}")
-
-                # Upload the flashcards to Anki
-                for card in flashcards:
-                    front = f"<h1>{author_name}</h1><h2>{book_title}</h2><br>{card['question']}"
-                    add_anki_card(
-                        f"Books::{author_name}",
-                        "Basic",
-                        front,
-                        card["answer"],
-                        tags=tags,
-                    )
-                logging.info(
-                    f"Uploaded flashcards for book '{author_name} - {book_title}' to Anki."
-                )
-
-            except Exception as e:
-                logging.error(f"Error processing book '{ebook_path}': {e}")
-
     # Process YouTube videos if found
     if video_ids:
-        logging.info(f"Processing {len(video_ids)} YouTube videos...")
-        for video_id in video_ids:
-            logging.info("----------------------------------")
-            logging.info(f"Processing video with ID: {video_id}")
-            # Get the title and channel name of the YouTube video
-            video_title, channel_name = get_youtube_video_details(video_id)
-            logging.info(f"Channel name: {channel_name}")
-            logging.info(f"Video title: {video_title}")
-            # Get the transcript for the YouTube video
-            transcript = extract_transcript_from_youtube(video_id)
+        process_youtube_videos(video_ids)
 
-            # Get the summary of the transcript
-            # summarized_transcript = summarize_transcript(transcript)
-            # Save the summarized transcript to a file
-            # save_to_file(summarized_transcript, "summaries")
+    # Process books if found
+    if books:
+        process_books(books)
 
-            # Generate flashcards from the transcript
-            flashcards = generate_flashcards(transcript)
-            print(flashcards)
-            logging.info(f"Created {len(flashcards)} flashcards for the video.")
-
-            # TODO An idea I had is to here do a second pass on the flashcards to make sure that the
-            # questions are not repeated or that no information is overlapped between questions which
-            # sometimes happens. Prompt GPT4 again with the flashcards and ask it to check for repeated
-            # information and modify them to keep the essential information.
-
-            # Generate tags for the flashcards
-            tags = generate_tags(flashcards)
-            logging.info(f"Generated {len(tags)} tags: {tags}.")
-
-            # Upload the flashcards to Anki
-            for card in flashcards:
-                # Add channel name and video title as a header to the card
-                front = f"<h1>{channel_name}</h1><h2>{video_title}</h2><br>{card['question']}"
-                add_anki_card(
-                    f"YouTube::{channel_name}",
-                    "Basic",
-                    front,
-                    card["answer"],
-                    tags=tags,
-                )
-            logging.info("Uploaded flashcards to Anki.")
+    # Process documents if found
+    if documents:
+        process_documents(documents)
 
     # Sync the media files with Anki
     send_anki_request("sync")
