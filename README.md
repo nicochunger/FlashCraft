@@ -4,32 +4,32 @@
 This is a personal project to test LLMs for an application that is useful to me and where the API is needed and connot be done with the usual chat interfaces.
 
 ## Application Overview
-This application automates the process of creating Anki flashcards from different types of content like educational YouTube videos, podcasts, audio files, articles, websites, etc. It extracts the text or transcript from the content, summarizes it to capture key concepts, generates flashcards based on this information, and uploads these cards directly to an Anki deck using the AnkiConnect API. The application can be triggered via email, allowing you to send links from any device, including your phone.
+This application automates the process of creating Anki flashcards from different types of content like educational YouTube videos, documents, books, podcasts, audio files, articles, etc. It extracts the text or transcript from the content, generates flashcards aimed for long term learning, and uploads these cards directly to your Anki account. The content is sent to the application via email, allowing you to send links or files from any device.
 
 ## How the Application Works
 
 1. **Email Trigger:**
-   - The application is set up to monitor a specific email account for new messages. When you want to create flashcards from a piece of content, you send an email to this account with the link.
+   - The application is set up to monitor a specific email account for new messages. When you want to create flashcards from a piece of content, you send an email to this account with the link or file.
    - The application uses the IMAP protocol to log in to the email account and check for new, unread emails.
 
-2. **Transcript Extraction:**
-   - Once a YouTube link is identified, the application uses the YouTube Data API (or a similar tool) to extract the transcript of the video. If the video has no transcript, the process stops here.
-   - If the content is a podcast or audio file it uses whisper to transcribe it.
+2. **Content Extraction:**
+   - Once a YouTube link is identified, the application uses the YouTube Data API to extract the transcript of the video. If the video has no transcript, the process stops here.
+   - If the email contains a text file it extracts the raw text from it.
+   - If the content is a podcast or audio file it uses speech-to-text to transcribe it (*not yet implemented*).
 
 3. **Flashcard Generation using OpenAI API:**
-   - The extracted transcript is processed using the OpenAI API, which summarizes the content and identifies key concepts.
-   - The application then generates flashcards in a question-answer format, capturing the essential information from the content.
+   - The extracted content is processed using the OpenAI API to generate flashcards in a question-answer format, capturing the essential and key information from the content.
 
 4. **Upload to Anki:**
-   - The generated flashcards are formatted according to Anki’s structure and uploaded to a specific deck in your Anki account using the AnkiConnect API.
-   - This allows you to review the content through Anki's spaced repetition system.
+   - The generated flashcards are formatted according to Anki’s structure and uploaded in an organized way to your Anki account using the AnkiConnect API.
+   - This allows you to review and learn the content through Anki's spaced repetition system.
 
-5. **Automation via Cron Job:**
-   - A cron job is set up on your Linux system to run the script at regular intervals (e.g., four times a day). This automation ensures that any new emails with YouTube links are processed without manual intervention.
+5. **(optional) Automation via Cron Job:**
+   - To automate the running of **FlashCraft**, a cron job can be set up on your Linux system to run the script at regular intervals (e.g., four times a day). This automation ensures that any new emails are processed without manual intervention.
 
 
 ## Setup Instructions
-To get the FlashCraft application up and running, follow these steps to configure the necessary APIs and email IMAP settings.
+These instructions are for me to not forget how to set everything up in case I have to start it from scratch. To get the FlashCraft application up and running, follow these steps to configure the necessary APIs and email IMAP settings.
 
 1. **Email IMAP Configuration**
 
@@ -122,6 +122,6 @@ To get the FlashCraft application up and running, follow these steps to configur
       0 */6 * * * /usr/bin/python3 /path/to/your/project/main.py
       ```
 
-   Replace `main.py` with the actual path to your script.
+   Replace `/path/to/your/project/main.py` with the actual path to your script.
 
    By following these steps, you should have the FlashCraft application up and running, ready to generate Anki flashcards from various content sources.
