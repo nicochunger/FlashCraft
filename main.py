@@ -487,7 +487,9 @@ def process_youtube_videos(video_ids):
         logging.info("----------------------------------")
         logging.info(f"Processing video with ID: {video_id}")
         # Get the title and channel name of the YouTube video
-        video_title, channel_name = get_youtube_video_details(video_id)
+        video_title, channel_name = get_youtube_video_details(
+            video_id, YOUTUBE_DATA_API_KEY
+        )
         logging.info(f"Channel name: {channel_name}")
         logging.info(f"Video title: {video_title}")
         # Get the transcript for the YouTube video
