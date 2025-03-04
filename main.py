@@ -468,10 +468,12 @@ def improve_flashcards(flashcards):
     # Create the review prompt
     review_prompt = """Review these flashcards and improve them by:
     1. Removing any duplicate information between cards
-    2. Combining similar questions
+    2. Reformulating questions that cover similar content to make them more distinct
     3. Ensuring questions are distinct and cover different aspects
     4. Maintaining essential information
     5. Making questions more specific and clear
+    
+    Important: Keep the same number of flashcards as the original.
     
     Return only the improved JSON array of flashcards.
     
