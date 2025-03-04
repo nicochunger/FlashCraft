@@ -22,14 +22,81 @@ function showMessage(message, type = 'success') {
     }, 5000);
 }
 
+// Make progress bar percentage display cleaner
 function updateProgressBar(percentage, message) {
     const progressContainer = document.getElementById('progress-container');
+    const progressBar = progressContainer.querySelector('.progress-bar');
     const progressText = progressContainer.querySelector('.progress-text');
-    const progressFill = progressContainer.querySelector('.progress-fill');
 
     progressContainer.style.display = 'block';
-    progressText.textContent = message;
-    progressFill.style.width = `${percentage}%`;
+    const roundedPercentage = Math.round(percentage);
+    progressBar.style.width = `${roundedPercentage}%`;
+    progressBar.textContent = `${roundedPercentage}%`;
+    progressText.textContent = message || 'Processing...';
+
+    // Hide result message if showing
+    const resultMessage = progressContainer.querySelector('.result-message');
+    resultMessage.style.display = 'none';
+    resultMessage.style.opacity = '0';
+}
+
+// Ensure result message is properly displayed
+function showResultMessage(message, type = 'success') {
+    const progressContainer = document.getElementById('progress-container');
+    const progress = progressContainer.querySelector('.progress');
+    const resultMessage = progressContainer.querySelector('.result-message');
+    const messageText = resultMessage.querySelector('.message-text');
+
+    // Ensure container is visible
+    progressContainer.style.display = 'block';
+    progressContainer.style.opacity = '1';
+
+    // Fade out progress elements
+    progress.style.opacity = '0';
+    setTimeout(() => {
+        progress.style.display = 'none';
+
+        // Show and fade in result message
+        messageText.textContent = message;
+        resultMessage.className = `result-message ${type}`;
+        resultMessage.style.display = 'block';
+
+        // Use a small delay to ensure the display change has taken effect
+        requestAnimationFrame(() => {
+            resultMessage.style.opacity = '1';
+        });
+
+        // Auto-dismiss success messages
+        if (type === 'success') {
+            setTimeout(() => {
+                hideProgressContainer();
+            }, 2000);
+        }
+    }, 200);
+}
+
+function hideProgressContainer() {
+    const progressContainer = document.getElementById('progress-container');
+    progressContainer.style.opacity = '0';
+    setTimeout(() => {
+        progressContainer.style.display = 'none';
+        resetProgressContainer();
+    }, 200);
+}
+
+function resetProgressContainer() {
+    const progressContainer = document.getElementById('progress-container');
+    const progress = progressContainer.querySelector('.progress');
+    const progressBar = progressContainer.querySelector('.progress-bar');
+    const resultMessage = progressContainer.querySelector('.result-message');
+
+    progress.style.display = 'block';
+    progress.style.opacity = '1';
+    progressBar.style.width = '0%';
+    progressBar.textContent = '0%';
+    resultMessage.style.display = 'none';
+    resultMessage.style.opacity = '0';
+    progressContainer.style.opacity = '1';
 }
 
 function checkProgress() {
@@ -37,7 +104,6 @@ function checkProgress() {
         .then(response => response.json())
         .then(data => {
             if (data.complete) {
-                document.getElementById('progress-container').style.display = 'none';
                 return;
             }
             updateProgressBar(data.percentage, data.message);
@@ -53,8 +119,9 @@ function handleFormSubmit(event) {
     const form = event.target;
     const formData = new FormData(form);
 
-    // Show progress container and reset progress
-    document.getElementById('progress-container').style.display = 'block';
+    const progressContainer = document.getElementById('progress-container');
+    progressContainer.style.display = 'block';
+    resetProgressContainer();
     updateProgressBar(0, 'Starting process...');
 
     fetch(form.action, {
@@ -63,17 +130,18 @@ function handleFormSubmit(event) {
     })
         .then(response => response.json())
         .then(data => {
+            // Stop progress checking
+            clearTimeout(checkProgress);
+
             if (data.success) {
-                alert(data.message);
+                showResultMessage(data.message, 'success');
             } else {
-                alert('Error: ' + data.message);
+                showResultMessage(data.message, 'error');
             }
-            document.getElementById('progress-container').style.display = 'none';
         })
         .catch(error => {
             console.error('Error:', error);
-            alert('An error occurred while processing your request.');
-            document.getElementById('progress-container').style.display = 'none';
+            showResultMessage('An error occurred while processing your request.', 'error');
         });
 
     // Start checking progress
