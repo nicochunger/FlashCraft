@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="FlashCraft - Generate Anki flashcards from various sources">
+    <title>FlashCraft</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .tab-content {
+            padding: 20px;
+            border-left: 1px solid #dee2e6;
+            border-right: 1px solid #dee2e6;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        #progress-container {
+            margin-top: 30px;
+            padding: 20px;
+            border-top: 1px solid #dee2e6;
+        }
+
+        .progress {
+            height: 25px;
+        }
+
+        .progress-bar {
+            line-height: 25px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>⚡ FlashCraft</h1>
+
+        <div class="tab-container">
+            <button class="tab-button active" onclick="openTab('youtube')">
+                <span>YouTube</span>
+            </button>
+            <button class="tab-button" onclick="openTab('text')">
+                <span>Text</span>
+            </button>
+            <button class="tab-button" onclick="openTab('document')">
+                <span>Document</span>
+            </button>
+        </div>
+
+        <div id="youtube" class="tab-content active">
+            <form id="youtube-form" action="/process_youtube" method="post">
+                <textarea name="youtube_links" placeholder="Paste YouTube links (one per line)"></textarea>
+                <button type="submit">Generate Flashcards</button>
+            </form>
+        </div>
+
+        <div id="text" class="tab-content">
+            <form id="text-form" action="/process_text" method="post">
+                <textarea name="raw_text" placeholder="Paste your text here"></textarea>
+                <div class="form-row">
+                    <input type="text" name="deck_name" placeholder="Anki Deck Name">
+                    <div class="number-input">
+                        <label for="num_questions">Number of Questions:</label>
+                        <input type="number" name="num_questions" id="num_questions" min="1" max="100" value="10">
+                    </div>
+                </div>
+                <button type="submit">Generate Flashcards</button>
+            </form>
+        </div>
+
+        <div id="document" class="tab-content">
+            <form id="document-form" action="/process_document" method="post" enctype="multipart/form-data">
+                <input type="file" name="document" accept=".epub,.mobi,.pdf">
+                <input type="text" name="deck_name" placeholder="Anki Deck Name">
+                <button type="submit">Generate Flashcards</button>
+            </form>
+        </div>
+
+        <div id="progress-container" class="progress-container">
+            <div class="progress-text"></div>
+            <div class="progress-bar">
+                <div class="progress-fill"></div>
+            </div>
+        </div>
+    </div>
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+
+</html>

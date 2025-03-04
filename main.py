@@ -21,12 +21,15 @@ import re
 import subprocess
 import time
 from email.header import decode_header
+from threading import Lock
 
-import json_repair
+# import json_repair
 import requests
 import tiktoken
 from dotenv import load_dotenv
+from flask import Flask, jsonify, render_template, request
 from openai import OpenAI
+from werkzeug.utils import secure_filename
 
 from content_types.books import process_book_attachment
 from content_types.youtube import (
@@ -54,6 +57,13 @@ parser.add_argument(
     default="gpt-4o",
     help="The LLM model to use for OpenAI API calls.",
     choices=["gpt-4o", "gpt-4o-mini"],
+)
+parser.add_argument(
+    "--mode",
+    type=str,
+    default="cli",
+    choices=["cli", "web"],
+    help="Run mode: 'cli' for command line (email checking) or 'web' for web interface",
 )
 args = parser.parse_args()
 
@@ -252,12 +262,13 @@ def calc_num_questions(num_tokens):
     return round(math.sqrt(num_tokens) / 25)
 
 
-def generate_flashcards(text, language="english"):
+def generate_flashcards(text, language="english", custom_num_questions=None):
     """Generate flashcards from a text.
 
     Args:
         text (str): The input text.
         language (str): The language for the flashcards.
+        custom_num_questions (int, optional): Custom number of questions to generate.
 
     Returns:
         dict: A JSON object containing the generated flashcards.
@@ -268,27 +279,22 @@ def generate_flashcards(text, language="english"):
         prompt = file.read().strip()
 
     flashcards_prompt = f"{prompt}\n\n{text}"
-
-    # Insert the selected language into the prompt
     flashcards_prompt = flashcards_prompt.replace("[LANGUAGE]", language)
 
-    # Count the number of tokens in the flashcards_prompt
-    num_tokens = len(flashcards_prompt.split())
+    # Use custom number of questions if provided, otherwise calculate based on tokens
+    if custom_num_questions is not None:
+        num_questions = custom_num_questions
+    else:
+        num_tokens = len(flashcards_prompt.split())
+        encoding = tiktoken.encoding_for_model(LLM_MODEL)
+        num_tokens = len(encoding.encode(flashcards_prompt))
+        logging.info(f"Number of tokens: {num_tokens}")
+        num_questions = calc_num_questions(num_tokens)
 
-    encoding = tiktoken.encoding_for_model(LLM_MODEL)
-    num_tokens = len(encoding.encode(flashcards_prompt))
-    logging.info(f"Number of tokens: {num_tokens}")
-
-    # Check if the number of tokens exceeds 200000 (limit for gpt-4o-mini)
-    if num_tokens > 200_000:
-        logging.error("The number of tokens exceeds the limit for the selected model.")
-
-    # Adjust number of questions based on the number of tokens
-    num_questions = calc_num_questions(num_tokens)
     logging.info(f"Number of questions to generate: {num_questions}")
     flashcards_prompt = flashcards_prompt.replace("[NUM_QUESTIONS]", str(num_questions))
 
-    # Call the OpenAI API to generate flashcards with the appropriate model
+    # Call the OpenAI API to generate flashcards
     flashcards = openai_call(flashcards_prompt, model="gpt-4o-mini")
 
     # Clean the output
@@ -299,23 +305,14 @@ def generate_flashcards(text, language="english"):
     # Convert to json
     flashcards_json = json.loads(flashcards)
 
-    # Placeholder for your OpenAI API code to generate flashcards
-    return flashcards_json
+    # Improve the flashcards
+    logging.info("Improving flashcards quality...")
+    improved_flashcards = improve_flashcards(flashcards_json)
+    logging.info(
+        f"Improved flashcards: {len(improved_flashcards)} cards after improvement."
+    )
 
-
-def process_flashcards(flashcards):
-    """Process the generated flashcards. It send them to gpt-4o for verification and correction.
-    It ensures that the questions are not repeated and that no information is overlapped between questions.
-    It also makes sure that the essential information is kept.
-
-    Args:
-        flashcards (dict): The generated flashcards.
-
-    Returns:
-        dict: The processed flashcards.
-    """
-    # TODO Placeholder for your code to process the flashcards
-    return flashcards
+    return improved_flashcards
 
 
 def generate_tags(text):
@@ -466,14 +463,34 @@ def improve_flashcards(flashcards):
     Returns:
         dict: The improved flashcards.
     """
-    # Placeholder for your code to improve the flashcards
+    logging.info("Improving flashcards quality...")
 
-    # TODO An idea I had is to here do a second pass on the flashcards to make sure that the
-    # questions are not repeated or that no information is overlapped between questions which
-    # sometimes happens. Prompt GPT4 again with the flashcards and ask it to check for repeated
-    # information and modify them to keep the essential information.
+    # Create the review prompt
+    review_prompt = """Review these flashcards and improve them by:
+    1. Removing any duplicate information between cards
+    2. Combining similar questions
+    3. Ensuring questions are distinct and cover different aspects
+    4. Maintaining essential information
+    5. Making questions more specific and clear
+    
+    Return only the improved JSON array of flashcards.
+    
+    Original flashcards:
+    """
 
-    return flashcards
+    # Convert flashcards to string and send for review
+    flashcards_str = json.dumps(flashcards, indent=2)
+    improved_flashcards = openai_call(review_prompt + flashcards_str, model="gpt-4o")
+
+    # Clean and parse the response
+    improved_flashcards = (
+        improved_flashcards.replace("```json\n", "")
+        .replace("```", "")
+        .replace("\n", "")
+        .strip()
+    )
+
+    return json.loads(improved_flashcards)
 
 
 def process_youtube_videos(video_ids):
@@ -483,29 +500,63 @@ def process_youtube_videos(video_ids):
         video_ids (list): The list of YouTube video IDs to process.
     """
     logging.info(f"Processing {len(video_ids)} YouTube videos...")
-    for video_id in video_ids:
+    total_videos = len(video_ids)
+
+    for idx, video_id in enumerate(video_ids):
+        video_progress_base = (idx / total_videos) * 100
+        video_progress_step = 100 / total_videos
+
         logging.info("----------------------------------")
         logging.info(f"Processing video with ID: {video_id}")
+        update_progress(
+            f"Processing video {idx + 1} of {total_videos}...", video_progress_base
+        )
+
         # Get the title and channel name of the YouTube video
+        update_progress(
+            f"Fetching video details for video {idx + 1}...",
+            video_progress_base + video_progress_step * 0.2,
+        )
         video_title, channel_name = get_youtube_video_details(
             video_id, YOUTUBE_DATA_API_KEY
         )
         logging.info(f"Channel name: {channel_name}")
         logging.info(f"Video title: {video_title}")
+
         # Get the transcript for the YouTube video
+        update_progress(
+            f"Extracting transcript for: {video_title}...",
+            video_progress_base + video_progress_step * 0.4,
+        )
         transcript = extract_transcript_from_youtube(video_id)
 
         # Generate flashcards from the transcript
+        update_progress(
+            f"Generating flashcards for: {video_title}...",
+            video_progress_base + video_progress_step * 0.6,
+        )
         flashcards = generate_flashcards(transcript)
-        print(flashcards)
         logging.info(f"Created {len(flashcards)} flashcards for the video.")
 
         # Generate tags for the flashcards
+        update_progress(
+            f"Generating tags for: {video_title}...",
+            video_progress_base + video_progress_step * 0.8,
+        )
         tags = generate_tags(flashcards)
         logging.info(f"Generated {len(tags)} tags: {tags}.")
 
         # Upload the flashcards to Anki
-        for card in flashcards:
+        update_progress(
+            f"Uploading flashcards for: {video_title}...",
+            video_progress_base + video_progress_step * 0.9,
+        )
+        for i, card in enumerate(flashcards):
+            card_progress = (i / len(flashcards)) * (video_progress_step * 0.1)
+            update_progress(
+                f"Uploading card {i + 1} of {len(flashcards)} for: {video_title}...",
+                video_progress_base + video_progress_step * 0.9 + card_progress,
+            )
             # Add channel name and video title as a header to the card
             front = (
                 f"<h1>{channel_name}</h1><h2>{video_title}</h2><br>{card['question']}"
@@ -622,6 +673,167 @@ def process_documents(documents):
             logging.error(f"Error processing document '{document_path}': {e}")
 
 
+app = Flask(__name__)
+app.config["UPLOAD_FOLDER"] = "downloads"
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB max file size
+
+# Add global progress tracking
+progress_data = {"message": "", "percentage": 0, "complete": False}
+progress_lock = Lock()
+
+
+def update_progress(message, percentage=None):
+    """Update the progress data with a new message and percentage."""
+    with progress_lock:
+        progress_data["message"] = message
+        if percentage is not None:
+            progress_data["percentage"] = percentage
+        progress_data["complete"] = False
+    # Add a small delay to make progress visible
+    time.sleep(0.5)  # 500ms delay
+
+
+def reset_progress():
+    """Reset the progress data."""
+    with progress_lock:
+        progress_data["message"] = ""
+        progress_data["percentage"] = 0
+        progress_data["complete"] = True
+
+
+# Add progress endpoint
+@app.route("/progress")
+def get_progress():
+    """Return the current progress data."""
+    with progress_lock:
+        return jsonify(progress_data)
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/process_youtube", methods=["POST"])
+def process_youtube():
+    try:
+        reset_progress()
+        youtube_links = request.form.get("youtube_links", "").strip()
+
+        if not youtube_links:
+            return jsonify(
+                {"success": False, "message": "Please provide YouTube links"}
+            )
+
+        pattern = (
+            r"(?:https?://(?:www\.)?youtube\.com/watch\?v=|https?://youtu\.be/)([\w-]+)"
+        )
+        video_ids = re.findall(pattern, youtube_links)
+
+        if not video_ids:
+            return jsonify(
+                {"success": False, "message": "No valid YouTube links found"}
+            )
+
+        update_progress("Starting YouTube video processing...", 0)
+        process_youtube_videos(video_ids)
+        reset_progress()
+        return jsonify(
+            {"success": True, "message": "Flashcards generated successfully!"}
+        )
+
+    except Exception as e:
+        reset_progress()
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/process_text", methods=["POST"])
+def process_text():
+    try:
+        reset_progress()
+        raw_text = request.form.get("raw_text", "").strip()
+        deck_name = request.form.get("deck_name", "").strip()
+        num_questions = request.form.get("num_questions", "").strip()
+
+        if not raw_text or not deck_name:
+            return jsonify(
+                {"success": False, "message": "Please provide text and deck name"}
+            )
+
+        try:
+            num_questions = int(num_questions) if num_questions else None
+            if num_questions is not None and (num_questions < 1 or num_questions > 100):
+                raise ValueError("Number of questions must be between 1 and 100")
+        except ValueError as e:
+            return jsonify({"success": False, "message": str(e)})
+
+        update_progress("Generating flashcards...", 20)
+        flashcards = generate_flashcards(raw_text, custom_num_questions=num_questions)
+
+        update_progress("Generating tags...", 40)
+        tags = generate_tags(flashcards)
+
+        update_progress("Uploading to Anki...", 60)
+        for i, card in enumerate(flashcards):
+            percentage = 60 + (i / len(flashcards) * 40)
+            update_progress(
+                f"Uploading card {i + 1} of {len(flashcards)}...", percentage
+            )
+            add_anki_card(
+                deck_name, "Basic", card["question"], card["answer"], tags=tags
+            )
+
+        reset_progress()
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Generated and improved {len(flashcards)} flashcards successfully!",
+            }
+        )
+
+    except Exception as e:
+        reset_progress()
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/process_document", methods=["POST"])
+def process_document():
+    try:
+        reset_progress()
+        if "document" not in request.files:
+            return jsonify({"success": False, "message": "No file uploaded"})
+
+        file = request.files["document"]
+        deck_name = request.form.get("deck_name", "").strip()
+
+        if not file.filename or not deck_name:
+            return jsonify(
+                {"success": False, "message": "Please provide a file and deck name"}
+            )
+
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+        file.save(filepath)
+
+        if filename.lower().endswith((".epub", ".mobi")):
+            update_progress("Processing book...", 20)
+            process_books([filepath])
+        elif filename.lower().endswith(".pdf"):
+            update_progress("Processing document...", 20)
+            process_documents([filepath])
+        else:
+            return jsonify({"success": False, "message": "Unsupported file format"})
+
+        reset_progress()
+        return jsonify(
+            {"success": True, "message": "Flashcards generated successfully!"}
+        )
+
+    except Exception as e:
+        reset_progress()
+        return jsonify({"success": False, "message": str(e)})
+
+
 def main():
     """Main function to execute the application logic."""
     # Check email for unread YouTube links or book attachments
@@ -680,4 +892,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Create upload folder if it doesn't exist
+    os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
+
+    if args.mode == "web":
+        # Run the Flask development server
+        app.run(debug=True, port=5000)
+    else:
+        # Run in CLI mode (email checking)
+        main()
