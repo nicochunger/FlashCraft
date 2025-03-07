@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import os
+import pathlib
 import re
 import subprocess
 import time
@@ -37,8 +38,14 @@ from content_types.youtube import (
     get_youtube_video_details,
 )
 
-# Load environment variables from .env file
-load_dotenv(".env")
+# Get the script's directory for absolute path resolution
+SCRIPT_DIR = pathlib.Path(__file__).parent.absolute()
+DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
+PROMPTS_DIR = SCRIPT_DIR / "prompts"
+TEMPLATES_DIR = SCRIPT_DIR / "templates"
+
+# Load environment variables from .env file in script directory
+load_dotenv(SCRIPT_DIR / ".env")
 # Get environment variables
 IMAP_SERVER = os.getenv("IMAP_SERVER")
 EMAIL = os.getenv("EMAIL")
@@ -160,9 +167,9 @@ def check_email():
                 ):
                     filename = part.get_filename()
                     if filename.lower().endswith(("epub", "mobi", ".pdf")):
-                        filepath = os.path.join("downloads", filename)
-                        if not os.path.exists("downloads"):
-                            os.makedirs("downloads")
+                        filepath = DOWNLOADS_DIR / filename
+                        if not DOWNLOADS_DIR.exists():
+                            DOWNLOADS_DIR.mkdir()
                         with open(filepath, "wb") as f:
                             f.write(part.get_payload(decode=True))
                         # Check if the file is a book or a document
@@ -239,7 +246,7 @@ def summarize_transcript(transcript):
     logging.info("Summarizing the YouTube video transcript with OpenAI API...")
 
     # Define the prompt with the preparatory instruction and append the transcript
-    with open("prompts/summarization.txt", "r") as file:
+    with open(PROMPTS_DIR / "summarization.txt", "r") as file:
         prompt = file.read().strip()
 
     full_prompt = f"{prompt}: {transcript}"
@@ -275,7 +282,7 @@ def generate_flashcards(text, language="english", custom_num_questions=None):
     """
     logging.info("Generating flashcards from the input text...")
 
-    with open("prompts/flashcard_generation.txt", "r") as file:
+    with open(PROMPTS_DIR / "flashcard_generation.txt", "r") as file:
         prompt = file.read().strip()
 
     flashcards_prompt = f"{prompt}\n\n{text}"
@@ -324,7 +331,7 @@ def generate_tags(text):
     Returns:
         list: A list of generated tags.
     """
-    with open("prompts/tags_generation.txt", "r") as file:
+    with open(PROMPTS_DIR / "tags_generation.txt", "r") as file:
         prompt = file.read().strip()
 
     tags_prompt = f"{prompt}\n\n{text}"
@@ -339,12 +346,7 @@ def generate_tags(text):
 
 
 def save_to_file(content: str, path: str = ""):
-    """Save content to a file with a title derived from the content.
-
-    Args:
-        content (str): The content to save.
-        path (str): The directory path to save the file in.
-    """
+    """Save content to a file with a title derived from the content."""
     # Save the summarized transcript to a file
     # Get the title from first line
     title = (
@@ -355,7 +357,8 @@ def save_to_file(content: str, path: str = ""):
         .lower()
         .replace(" ", "_")
     )
-    with open(os.path.join(path, f"{title}.md"), "w") as file:
+    save_path = SCRIPT_DIR / path if path else SCRIPT_DIR
+    with open(save_path / f"{title}.md", "w") as file:
         file.write(content)
 
 
@@ -674,8 +677,8 @@ def process_documents(documents):
             logging.error(f"Error processing document '{document_path}': {e}")
 
 
-app = Flask(__name__)
-app.config["UPLOAD_FOLDER"] = "downloads"
+app = Flask(__name__, template_folder=str(TEMPLATES_DIR))
+app.config["UPLOAD_FOLDER"] = str(DOWNLOADS_DIR)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB max file size
 
 # Add global progress tracking
@@ -813,7 +816,7 @@ def process_document():
             )
 
         filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+        filepath = DOWNLOADS_DIR / filename
         file.save(filepath)
 
         if filename.lower().endswith((".epub", ".mobi")):
@@ -930,7 +933,7 @@ def main():
 
 if __name__ == "__main__":
     # Create upload folder if it doesn't exist
-    os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
+    DOWNLOADS_DIR.mkdir(exist_ok=True)
 
     if args.mode == "web":
         # Ensure Anki is running before starting the web server
