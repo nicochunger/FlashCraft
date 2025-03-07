@@ -835,6 +835,62 @@ def process_document():
         return jsonify({"success": False, "message": str(e)})
 
 
+def ensure_anki_running():
+    """Ensure Anki is running and ready.
+
+    Returns:
+        tuple: (bool, subprocess.Popen) - Success status and Anki process if started
+    """
+    # Set DISPLAY environment variable if not set (for cron jobs)
+    if "DISPLAY" not in os.environ:
+        os.environ["DISPLAY"] = ":0"
+
+    # Check if Anki is already running
+    try:
+        anki_running = subprocess.run(
+            ["pgrep", "-f", "anki"], capture_output=True, text=True
+        ).stdout.strip()
+
+        anki_process = None
+        if not anki_running:
+            # Open Anki if it's not running
+            with open("anki_output.log", "w") as f:
+                anki_process = subprocess.Popen(
+                    ["anki"], stdout=f, stderr=f, env=dict(os.environ)
+                )
+            logging.info("Started Anki process")
+        else:
+            logging.info("Anki is already running")
+
+        # Wait for Anki to be ready
+        start_time = time.time()
+        is_ready = False
+        while time.time() - start_time < 30:  # Maximum wait time of 30 seconds
+            try:
+                response = requests.post(
+                    ANKI_CONNECT_URL,
+                    json={"action": "version", "version": 6},
+                    timeout=5,
+                )
+                if response.status_code == 200:
+                    is_ready = True
+                    break
+            except requests.RequestException:
+                time.sleep(1)  # Check every 1 second
+
+        if not is_ready:
+            logging.error("Anki is not responding.")
+            if anki_process:
+                anki_process.kill()
+            return False, None
+
+        return True, anki_process
+
+    except subprocess.CalledProcessError:
+        logging.error("Failed to check if Anki is running")
+        return False, None
+
+
 def main():
     """Main function to execute the application logic."""
     # Check email for unread YouTube links or book attachments
@@ -847,50 +903,9 @@ def main():
         logging.info("No new YouTube links or book attachments found.")
         return
 
-    # Set DISPLAY environment variable if not set (for cron jobs)
-    if "DISPLAY" not in os.environ:
-        os.environ["DISPLAY"] = ":0"
-
-    # Check if Anki is already running
-    try:
-        anki_running = subprocess.run(
-            ["pgrep", "-f", "anki"], capture_output=True, text=True
-        ).stdout.strip()
-
-        if not anki_running:
-            # Open Anki if it's not running
-            with open("anki_output.log", "w") as f:
-                anki_process = subprocess.Popen(
-                    ["anki"], stdout=f, stderr=f, env=dict(os.environ)
-                )
-        else:
-            logging.info("Anki is already running")
-            anki_process = None
-    except subprocess.CalledProcessError:
-        logging.error("Failed to check if Anki is running")
+    success, anki_process = ensure_anki_running()
+    if not success:
         return
-
-    # Wait for Anki to be ready
-    start_time = time.time()
-    is_ready = False
-    while time.time() - start_time < 30:  # Maximum wait time of 30 seconds
-        try:
-            response = requests.post(
-                ANKI_CONNECT_URL, json={"action": "version", "version": 6}, timeout=5
-            )
-            if response.status_code == 200:
-                is_ready = True
-                break
-        except requests.RequestException:
-            time.sleep(1)  # Check every 1 second
-
-    if not is_ready:
-        logging.error("Anki is not responding.")
-        if anki_process:
-            anki_process.kill()
-        return
-
-    logging.info("Anki is ready.")
 
     # Process content and sync
     try:
@@ -918,8 +933,19 @@ if __name__ == "__main__":
     os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
     if args.mode == "web":
-        # Run the Flask development server
-        app.run(debug=True, port=5000)
+        # Ensure Anki is running before starting the web server
+        success, anki_process = ensure_anki_running()
+        if not success:
+            logging.error("Failed to start Anki. Exiting.")
+            exit(1)
+
+        try:
+            # Run the Flask development server
+            app.run(debug=True, port=5000)
+        finally:
+            # Clean up Anki process if we started it
+            if anki_process:
+                anki_process.kill()
     else:
         # Run in CLI mode (email checking)
         main()
