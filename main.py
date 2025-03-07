@@ -331,7 +331,6 @@ def generate_tags(text):
 
     # Call the OpenAI API to generate tags
     tags_response = openai_call(tags_prompt)
-    print(tags_response)
 
     # Convert the response to a list of tags
     tags = tags_response.split(" ")
@@ -848,49 +847,70 @@ def main():
         logging.info("No new YouTube links or book attachments found.")
         return
 
-    # Open Anki
-    with open("anki_output.log", "w") as f:
-        anki_process = subprocess.Popen(["anki"], stdout=f, stderr=f)
+    # Set DISPLAY environment variable if not set (for cron jobs)
+    if "DISPLAY" not in os.environ:
+        os.environ["DISPLAY"] = ":0"
+
+    # Check if Anki is already running
+    try:
+        anki_running = subprocess.run(
+            ["pgrep", "-f", "anki"], capture_output=True, text=True
+        ).stdout.strip()
+
+        if not anki_running:
+            # Open Anki if it's not running
+            with open("anki_output.log", "w") as f:
+                anki_process = subprocess.Popen(
+                    ["anki"], stdout=f, stderr=f, env=dict(os.environ)
+                )
+        else:
+            logging.info("Anki is already running")
+            anki_process = None
+    except subprocess.CalledProcessError:
+        logging.error("Failed to check if Anki is running")
+        return
 
     # Wait for Anki to be ready
     start_time = time.time()
+    is_ready = False
     while time.time() - start_time < 30:  # Maximum wait time of 30 seconds
         try:
             response = requests.post(
                 ANKI_CONNECT_URL, json={"action": "version", "version": 6}, timeout=5
             )
             if response.status_code == 200:
+                is_ready = True
                 break
         except requests.RequestException:
-            pass
-        time.sleep(1)  # Check every 1 second
+            time.sleep(1)  # Check every 1 second
 
-    if time.time() - start_time >= 30:
+    if not is_ready:
         logging.error("Anki is not responding.")
-        anki_process.kill()
+        if anki_process:
+            anki_process.kill()
         return
 
     logging.info("Anki is ready.")
-    # Sync Anki
-    send_anki_request("sync")
 
-    # Process YouTube videos if found
-    if video_ids:
-        process_youtube_videos(video_ids)
+    # Process content and sync
+    try:
+        send_anki_request("sync")
 
-    # Process books if found
-    if books:
-        process_books(books)
+        if video_ids:
+            process_youtube_videos(video_ids)
+        if books:
+            process_books(books)
+        if documents:
+            process_documents(documents)
 
-    # Process documents if found
-    if documents:
-        process_documents(documents)
-
-    # Sync the media files with Anki
-    send_anki_request("sync")
-    logging.info("Sync completed!")
-    # Close Anki
-    anki_process.kill()
+        send_anki_request("sync")
+        logging.info("Sync completed!")
+    except Exception as e:
+        logging.error(f"Error processing content: {e}")
+    finally:
+        # Only close Anki if we started it
+        if anki_process:
+            anki_process.kill()
 
 
 if __name__ == "__main__":
