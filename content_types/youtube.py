@@ -38,7 +38,7 @@ def extract_transcript_from_youtube(video_id):
         str: The formatted transcript of the video as plain text.
     """
     # Get the transcript for the YouTube video
-    transcript = YouTubeTranscriptApi.get_transcript(video_id)
+    transcript = YouTubeTranscriptApi.get_transcript(video_id, ["en", "es", "de", "fr"])
     # Format the transcript as plain text
     formatted_transcript = TextFormatter().format_transcript(transcript)
     # Remove newlines from the formatted transcript and return it
