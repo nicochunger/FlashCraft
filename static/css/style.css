@@ -3,7 +3,7 @@ body {
     line-height: 1.6;
     margin: 0;
     padding: 20px;
-    background: linear-gradient(135deg, #f5f7fa 0%, #e4e9f2 100%);
+    background: linear-gradient(135deg, #fff9e6 0%, #fff3cc 100%);
     min-height: 100vh;
 }
 
@@ -18,7 +18,7 @@ body {
 
 h1 {
     text-align: center;
-    color: #1a1a1a;
+    color: #ffcc00;
     font-size: 2.5em;
     margin-bottom: 1.5em;
     font-weight: 700;
@@ -63,11 +63,11 @@ h1 {
 
 .tab-button:hover {
     color: #007bff;
-    background-color: rgba(0, 123, 255, 0.1);
+    background-color: rgba(255, 204, 0, 0.1);
 }
 
 .tab-button.active {
-    background-color: #007bff;
+    background-color: #ffcc00;
     color: white;
 }
 
@@ -99,7 +99,7 @@ textarea {
 }
 
 textarea:focus {
-    border-color: #007bff;
+    border-color: #ffcc00;
     outline: none;
 }
 
@@ -115,7 +115,7 @@ input[type="number"] {
 
 input[type="text"]:focus,
 input[type="number"]:focus {
-    border-color: #007bff;
+    border-color: #ffcc00;
     outline: none;
 }
 
@@ -130,12 +130,12 @@ input[type="file"] {
 }
 
 input[type="file"]:hover {
-    border-color: #007bff;
+    border-color: #ffcc00;
 }
 
 button {
     padding: 12px 24px;
-    background-color: #007bff;
+    background-color: #ffcc00;
     color: white;
     border: none;
     border-radius: 8px;
@@ -146,9 +146,9 @@ button {
 }
 
 button:hover {
-    background-color: #0056b3;
+    background-color: #e6b800;
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(0, 123, 255, 0.2);
+    box-shadow: 0 4px 12px rgba(255, 204, 0, 0.2);
 }
 
 .message {
@@ -160,9 +160,9 @@ button:hover {
 }
 
 .message.success {
-    background-color: #d4edda;
-    color: #155724;
-    border: 1px solid #c3e6cb;
+    background-color: #fff9e6;
+    color: #856404;
+    border: 1px solid #ffeeba;
     display: block;
 }
 
@@ -199,7 +199,7 @@ button:hover {
 
 .number-input label {
     white-space: nowrap;
-    color: #666;
+    color: #856404;
     font-weight: 500;
 }
 
@@ -246,8 +246,14 @@ button:hover {
 .progress-fill {
     height: 100%;
     width: 0;
-    background: #007bff;
+    background: #ffcc00;
     transition: width 0.3s ease-in-out;
+}
+
+.logo-container img {
+    max-width: 100%;
+    height: auto;
+    display: inline-block;
 }
 
 /* Responsive adjustments */

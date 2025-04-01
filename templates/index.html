@@ -35,7 +35,7 @@
         .progress-bar {
             height: 100%;
             line-height: 25px;
-            background-color: #007bff;
+            background-color: #ffc107;
             transition: width 0.3s ease-in-out;
             text-align: center;
             color: white;
@@ -62,9 +62,9 @@
         }
 
         .result-message.success {
-            background-color: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
         }
 
         .result-message.error {
@@ -80,7 +80,7 @@
 
         .result-message.success .icon::before {
             content: '✓';
-            color: #28a745;
+            color: #ffc107;
         }
 
         .result-message.error .icon::before {
@@ -92,7 +92,11 @@
 
 <body>
     <div class="container">
-        <h1>⚡ FlashCraft</h1>
+        <!-- Logo at the top -->
+        <div class="logo-container" style="text-align: center; margin-bottom: 20px;">
+            <img src="{{ url_for('static', filename='images/FlashCraft_logo.png') }}" alt="FlashCraft Logo" width="150">
+        </div>
+        <h1>FlashCraft</h1>
 
         <div class="tab-container">
             <button class="tab-button active" onclick="openTab('youtube')">
