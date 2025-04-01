@@ -1,3 +1,5 @@
+<img src="FlashCraft_logo.png" alt="FlashCraft Logo" width="250">
+
 # FlashCraft
 # An Anki Flashcard Generator using AI
 
