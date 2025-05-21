@@ -19,6 +19,7 @@ import math
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import time
 from email.header import decode_header
@@ -29,7 +30,14 @@ import requests
 import tiktoken
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
-from openai import OpenAI
+from openai import (
+    OpenAI,
+    APIError,
+    RateLimitError,
+    AuthenticationError,
+    APITimeoutError,
+    BadRequestError
+)
 from werkzeug.utils import secure_filename
 
 from content_types.books import process_book_attachment
@@ -219,19 +227,34 @@ def openai_call(prompt, model=LLM_MODEL):
         model (str): The model to use for the API call.
 
     Returns:
-        str: The response content from the OpenAI API.
+        str: The response content from the OpenAI API, or None if an error occurred.
     """
-    chat_completion = OPENAI_CLIENT.chat.completions.create(
-        messages=[
-            {
-                "role": "user",
-                "content": prompt,
-            }
-        ],
-        model=model,
-    )
-
-    return chat_completion.choices[0].message.content
+    try:
+        chat_completion = OPENAI_CLIENT.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            model=model,
+        )
+        return chat_completion.choices[0].message.content
+    except RateLimitError as e:
+        logging.error(f"OpenAI API request exceeded rate limit: {e}")
+        return None
+    except AuthenticationError as e:
+        logging.error(f"OpenAI API authentication failed: {e}")
+        return None
+    except APITimeoutError as e:
+        logging.error(f"OpenAI API request timed out: {e}")
+        return None
+    except BadRequestError as e:
+        logging.error(f"OpenAI API request was invalid: {e}. Prompt: {prompt[:100]}...")
+        return None
+    except APIError as e:
+        logging.error(f"OpenAI API returned an API Error: {e}")
+        return None
 
 
 def summarize_transcript(transcript):
@@ -507,72 +530,85 @@ def process_youtube_videos(video_ids):
     total_videos = len(video_ids)
 
     for idx, video_id in enumerate(video_ids):
-        video_progress_base = (idx / total_videos) * 100
-        video_progress_step = 100 / total_videos
+        try:
+            video_progress_base = (idx / total_videos) * 100
+            video_progress_step = 100 / total_videos
 
-        logging.info("----------------------------------")
-        logging.info(f"Processing video with ID: {video_id}")
-        update_progress(
-            f"Processing video {idx + 1} of {total_videos}...", video_progress_base
-        )
-
-        # Get the title and channel name of the YouTube video
-        update_progress(
-            f"Fetching video details for video {idx + 1}...",
-            video_progress_base + video_progress_step * 0.2,
-        )
-        video_title, channel_name = get_youtube_video_details(
-            video_id, YOUTUBE_DATA_API_KEY
-        )
-        logging.info(f"Channel name: {channel_name}")
-        logging.info(f"Video title: {video_title}")
-
-        # Get the transcript for the YouTube video
-        update_progress(
-            f"Extracting transcript for: {video_title}...",
-            video_progress_base + video_progress_step * 0.4,
-        )
-        transcript = extract_transcript_from_youtube(video_id)
-
-        # Generate flashcards from the transcript
-        update_progress(
-            f"Generating flashcards for: {video_title}...",
-            video_progress_base + video_progress_step * 0.6,
-        )
-        flashcards = generate_flashcards(transcript)
-        logging.info(f"Created {len(flashcards)} flashcards for the video.")
-
-        # Generate tags for the flashcards
-        update_progress(
-            f"Generating tags for: {video_title}...",
-            video_progress_base + video_progress_step * 0.8,
-        )
-        tags = generate_tags(flashcards)
-        logging.info(f"Generated {len(tags)} tags: {tags}.")
-
-        # Upload the flashcards to Anki
-        update_progress(
-            f"Uploading flashcards for: {video_title}...",
-            video_progress_base + video_progress_step * 0.9,
-        )
-        for i, card in enumerate(flashcards):
-            card_progress = (i / len(flashcards)) * (video_progress_step * 0.1)
+            logging.info("----------------------------------")
+            logging.info(f"Processing video with ID: {video_id}")
             update_progress(
-                f"Uploading card {i + 1} of {len(flashcards)} for: {video_title}...",
-                video_progress_base + video_progress_step * 0.9 + card_progress,
+                f"Processing video {idx + 1} of {total_videos}...", video_progress_base
             )
-            # Add channel name and video title as a header to the card
-            front = (
-                f"<h1>{channel_name}</h1><h2>{video_title}</h2><br>{card['question']}"
+
+            # Get the title and channel name of the YouTube video
+            update_progress(
+                f"Fetching video details for video {idx + 1}...",
+                video_progress_base + video_progress_step * 0.2,
             )
-            add_anki_card(
-                f"YouTube::{channel_name}",
-                "Basic",
-                front,
-                card["answer"],
-                tags=tags,
+            video_title, channel_name = get_youtube_video_details(
+                video_id, YOUTUBE_DATA_API_KEY
             )
-        logging.info("Uploaded flashcards to Anki.")
+            logging.info(f"Channel name: {channel_name}")
+            logging.info(f"Video title: {video_title}")
+
+            # Get the transcript for the YouTube video
+            update_progress(
+                f"Extracting transcript for: {video_title}...",
+                video_progress_base + video_progress_step * 0.4,
+            )
+            transcript = extract_transcript_from_youtube(video_id)
+            if not transcript:
+                logging.warning(f"No transcript found or extracted for video {video_id}. Skipping.")
+                continue
+
+            # Generate flashcards from the transcript
+            update_progress(
+                f"Generating flashcards for: {video_title}...",
+                video_progress_base + video_progress_step * 0.6,
+            )
+            flashcards = generate_flashcards(transcript)
+            if flashcards is None:
+                logging.error(f"Failed to generate flashcards for video {video_id} (OpenAI API issue). Skipping this video.")
+                continue
+            logging.info(f"Created {len(flashcards)} flashcards for the video.")
+
+            # Generate tags for the flashcards
+            update_progress(
+                f"Generating tags for: {video_title}...",
+                video_progress_base + video_progress_step * 0.8,
+            )
+            tags = generate_tags(flashcards)
+            if tags is None:
+                logging.warning(f"Failed to generate tags for video {video_id} (OpenAI API issue). Proceeding without tags for this video.")
+                tags = [] # Set to empty list to avoid errors in add_anki_card
+            logging.info(f"Generated {len(tags)} tags: {tags}.")
+
+            # Upload the flashcards to Anki
+            update_progress(
+                f"Uploading flashcards for: {video_title}...",
+                video_progress_base + video_progress_step * 0.9,
+            )
+            for i, card in enumerate(flashcards):
+                card_progress = (i / len(flashcards)) * (video_progress_step * 0.1)
+                update_progress(
+                    f"Uploading card {i + 1} of {len(flashcards)} for: {video_title}...",
+                    video_progress_base + video_progress_step * 0.9 + card_progress,
+                )
+                # Add channel name and video title as a header to the card
+                front = (
+                    f"<h1>{channel_name}</h1><h2>{video_title}</h2><br>{card['question']}"
+                )
+                add_anki_card(
+                    f"YouTube::{channel_name}",
+                    "Basic",
+                    front,
+                    card["answer"],
+                    tags=tags,
+                )
+            logging.info("Uploaded flashcards to Anki.")
+        except Exception as e:
+            logging.error(f"Failed to process YouTube video {video_id} due to an unexpected error: {e}")
+            continue
 
 
 def process_books(books):
@@ -583,17 +619,34 @@ def process_books(books):
         books (list): The list of paths to the book files.
     """
     logging.info(f"Processing {len(books)} new books...")
+    # is_single_file_web_request = len(books) == 1 and request and 'document' in request.files
+    # Simplified assumption for now: if len(books) == 1, it *could* be a web request needing specific feedback.
+
     for ebook_path in books:
         try:
             # Convert ebook to text
             book_content = process_book_attachment(ebook_path)
+            if book_content is None:
+                logging.error(f"Failed to retrieve content for book {ebook_path} (possibly missing ebook-convert or file issue). Skipping this book.")
+                if len(books) == 1: # Check if it's a single file upload, possibly from web UI
+                    return "ebook-convert_missing"
+                continue
+            if not book_content.strip():
+                logging.warning(f"Content for book {ebook_path} is empty. Skipping this book.")
+                continue
 
             # Generate flashcards from the text
             flashcards = generate_flashcards(book_content)
+            if flashcards is None:
+                logging.error(f"Failed to generate flashcards for book {ebook_path} (OpenAI API issue). Skipping this book.")
+                continue
             logging.info(f"Created {len(flashcards)} flashcards from the book.")
 
             # Generate tags for the flashcards
             tags = generate_tags(flashcards)
+            if tags is None:
+                logging.warning(f"Failed to generate tags for book {ebook_path} (OpenAI API issue). Proceeding without tags for this book.")
+                tags = []
             logging.info(f"Generated tags: {tags}.")
 
             # Use the book filename to infer the author and title
@@ -601,11 +654,18 @@ def process_books(books):
                 f"Return just the author name of the book inferred from this filename: {ebook_path}. The answer should ONLY contain the name of the author and nothing else.",
                 model="gpt-4o-mini",
             )
+            if author_name is None:
+                logging.warning(f"Failed to determine author for {ebook_path} (OpenAI API issue). Using 'Unknown Author'.")
+                author_name = "Unknown Author"
             logging.info(f"Author name: {author_name}")
+
             book_title = openai_call(
                 f"Return just the title of the book inferred from this filename: {ebook_path}. The answer should ONLY contain the name of the book and nothing else.",
                 model="gpt-4o-mini",
             )
+            if book_title is None:
+                logging.warning(f"Failed to determine title for {ebook_path} (OpenAI API issue). Using 'Unknown Title'.")
+                book_title = "Unknown Title"
             logging.info(f"Book title: {book_title}")
 
             # Upload the flashcards to Anki
@@ -626,6 +686,7 @@ def process_books(books):
 
         except Exception as e:
             logging.error(f"Error processing book '{ebook_path}': {e}")
+    return "success" # Default return if all processing completes or other errors are handled
 
 
 def process_documents(documents):
@@ -638,18 +699,36 @@ def process_documents(documents):
     logging.info(f"Processing {len(documents)} new documents...")
     for document_path in documents:
         try:
+            # Check if pdftotext is available
+            if not shutil.which("pdftotext"):
+                logging.error(
+                    f"pdftotext tool not found. Skipping processing for {document_path}."
+                )
+                if len(documents) == 1: # Check if it's a single file upload, possibly from web UI
+                    return "pdftotext_missing"
+                continue
+
             # Convert document to text
             text_file_path = document_path.rsplit(".", 1)[0] + ".txt"
             subprocess.run(["pdftotext", document_path, text_file_path], check=True)
             with open(text_file_path, "r") as file:
                 document_content = file.read()
+            if not document_content.strip():
+                logging.warning(f"Content for document {document_path} is empty. Skipping this document.")
+                continue
 
             # Generate flashcards from the text
             flashcards = generate_flashcards(document_content)
+            if flashcards is None:
+                logging.error(f"Failed to generate flashcards for document {document_path} (OpenAI API issue). Skipping this document.")
+                continue
             logging.info(f"Created {len(flashcards)} flashcards from the document.")
 
             # Generate tags for the flashcards
             tags = generate_tags(flashcards)
+            if tags is None:
+                logging.warning(f"Failed to generate tags for document {document_path} (OpenAI API issue). Proceeding without tags for this document.")
+                tags = []
             logging.info(f"Generated tags: {tags}.")
 
             # Use the document filename to infer the topic
@@ -659,6 +738,9 @@ def process_documents(documents):
                 "\n\nThe answer should ONLY contain the topic or title and nothing else.",
                 model="gpt-4o-mini",
             )
+            if topic is None:
+                logging.warning(f"Failed to determine topic for {document_path} (OpenAI API issue). Using 'Unknown Topic'.")
+                topic = "Unknown Topic"
             logging.info(f"Topic: {topic}")
 
             # Upload the flashcards to Anki
@@ -675,6 +757,7 @@ def process_documents(documents):
 
         except Exception as e:
             logging.error(f"Error processing document '{document_path}': {e}")
+    return "success" # Default return if all processing completes or other errors are handled
 
 
 app = Flask(__name__, template_folder=str(TEMPLATES_DIR))
@@ -818,20 +901,32 @@ def process_document():
         filename = secure_filename(file.filename)
         filepath = DOWNLOADS_DIR / filename
         file.save(filepath)
+        result = None
 
         if filename.lower().endswith((".epub", ".mobi")):
             update_progress("Processing book...", 20)
-            process_books([filepath])
+            result = process_books([filepath])
+            if result == "ebook-convert_missing":
+                reset_progress()
+                return jsonify({"success": False, "message": "Processing failed: ebook-convert tool (part of Calibre) is not installed. Please install Calibre to process .epub/.mobi files."})
         elif filename.lower().endswith(".pdf"):
             update_progress("Processing document...", 20)
-            process_documents([filepath])
+            result = process_documents([filepath])
+            if result == "pdftotext_missing":
+                reset_progress()
+                return jsonify({"success": False, "message": "Processing failed: pdftotext tool is not installed. Please install it (e.g., sudo apt-get install poppler-utils) to process .pdf files."})
         else:
             return jsonify({"success": False, "message": "Unsupported file format"})
 
         reset_progress()
-        return jsonify(
-            {"success": True, "message": "Flashcards generated successfully!"}
-        )
+        # Default success message if no specific missing dependency was caught
+        if result == "success" or result is None: # result is None if not set by specific checks but processing finished
+            return jsonify(
+                {"success": True, "message": "Flashcards generated successfully!"}
+            )
+        else: # Should ideally not be reached if all specific results are handled
+            return jsonify({"success": False, "message": f"An unexpected processing result: {result}"})
+
 
     except Exception as e:
         reset_progress()
@@ -842,7 +937,7 @@ def ensure_anki_running():
     """Ensure Anki is running and ready.
 
     Returns:
-        tuple: (bool, subprocess.Popen) - Success status and Anki process if started
+        tuple: (bool, subprocess.Popen or None, bool) - Success status, Anki process if started by this function, and a flag indicating if Anki was started by this function.
     """
     # Set DISPLAY environment variable if not set (for cron jobs)
     if "DISPLAY" not in os.environ:
@@ -855,12 +950,14 @@ def ensure_anki_running():
         ).stdout.strip()
 
         anki_process = None
+        was_started_by_flashcraft = False
         if not anki_running:
             # Open Anki if it's not running
             with open("anki_output.log", "w") as f:
                 anki_process = subprocess.Popen(
                     ["anki"], stdout=f, stderr=f, env=dict(os.environ)
                 )
+                was_started_by_flashcraft = True
             logging.info("Started Anki process")
         else:
             logging.info("Anki is already running")
@@ -883,15 +980,15 @@ def ensure_anki_running():
 
         if not is_ready:
             logging.error("Anki is not responding.")
-            if anki_process:
+            if anki_process and was_started_by_flashcraft:
                 anki_process.kill()
-            return False, None
+            return False, anki_process if was_started_by_flashcraft else None, was_started_by_flashcraft
 
-        return True, anki_process
+        return True, anki_process if was_started_by_flashcraft else None, was_started_by_flashcraft
 
     except subprocess.CalledProcessError:
         logging.error("Failed to check if Anki is running")
-        return False, None
+        return False, None, False
 
 
 def main():
@@ -906,7 +1003,7 @@ def main():
         logging.info("No new YouTube links or book attachments found.")
         return
 
-    success, anki_process = ensure_anki_running()
+    success, anki_process, _ = ensure_anki_running() # anki_started_by_us is not used in CLI mode
     if not success:
         return
 
@@ -927,7 +1024,7 @@ def main():
         logging.error(f"Error processing content: {e}")
     finally:
         # Only close Anki if we started it
-        if anki_process:
+    if anki_process: # In CLI mode, anki_process is always the one we started or None
             anki_process.kill()
 
 
@@ -937,7 +1034,7 @@ if __name__ == "__main__":
 
     if args.mode == "web":
         # Ensure Anki is running before starting the web server
-        success, anki_process = ensure_anki_running()
+        success, anki_process, anki_started_by_us = ensure_anki_running()
         if not success:
             logging.error("Failed to start Anki. Exiting.")
             exit(1)
@@ -947,7 +1044,7 @@ if __name__ == "__main__":
             app.run(debug=True, port=5000)
         finally:
             # Clean up Anki process if we started it
-            if anki_process:
+            if anki_process and anki_started_by_us:
                 anki_process.kill()
     else:
         # Run in CLI mode (email checking)
