@@ -266,7 +266,8 @@ def calc_num_questions(num_tokens):
     Returns:
         int: The number of questions to generate.
     """
-    return round(math.sqrt(num_tokens) / 25)
+    num_questions = round(math.sqrt(num_tokens) / 25)
+    return max(1, num_questions)
 
 
 def generate_flashcards(text, language="english", custom_num_questions=None):
