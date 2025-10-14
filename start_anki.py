@@ -100,7 +100,7 @@ def _start_linux_anki(env: dict) -> Optional[subprocess.Popen]:
 
 
 def ensure_anki_running(
-    timeout_seconds: int = 60,
+    timeout_seconds: int = 120,
 ) -> Tuple[bool, Optional[subprocess.Popen]]:
     """
     Ensure Anki (Linux) is running and AnkiConnect is responding at ANKI_CONNECT_URL.

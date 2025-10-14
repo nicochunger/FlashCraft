@@ -1,7 +1,9 @@
 import subprocess
+from pathlib import Path
+from typing import Union
 
 
-def convert_to_text(file_path: str):
+def convert_to_text(file_path: Union[str, Path]) -> str:
     """Convert an .epub or .mobi file to a text file using Calibre's ebook-convert tool.
 
     Args:
@@ -10,12 +12,13 @@ def convert_to_text(file_path: str):
     Returns:
         str: The path to the converted text file.
     """
-    text_file_path = file_path.rsplit(".", 1)[0] + ".txt"
-    subprocess.run(["ebook-convert", file_path, text_file_path], check=True)
-    return text_file_path
+    path = Path(file_path)
+    text_file_path = path.with_suffix(".txt")
+    subprocess.run(["ebook-convert", str(path), str(text_file_path)], check=True)
+    return str(text_file_path)
 
 
-def process_book_attachment(file_path: str):
+def process_book_attachment(file_path: Union[str, Path]) -> str:
     """Process a book attachment by converting it to text and reading the content.
 
     Args:
