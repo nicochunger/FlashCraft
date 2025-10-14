@@ -62,9 +62,9 @@ parser.add_argument(
     "-m",
     "--model",
     type=str,
-    default="gpt-4o",
+    default="gpt-5",
     help="The LLM model to use for OpenAI API calls.",
-    choices=["gpt-4o", "gpt-4o-mini"],
+    choices=["gpt-5", "gpt-5-mini"],
 )
 parser.add_argument(
     "--mode",
@@ -295,7 +295,10 @@ def generate_flashcards(text, language="english", custom_num_questions=None):
         num_questions = custom_num_questions
     else:
         num_tokens = len(flashcards_prompt.split())
-        encoding = tiktoken.encoding_for_model(LLM_MODEL)
+        try:
+            encoding = tiktoken.encoding_for_model(LLM_MODEL)
+        except KeyError:
+            encoding = tiktoken.get_encoding("o200k_base")
         num_tokens = len(encoding.encode(flashcards_prompt))
         logging.info(f"Number of tokens: {num_tokens}")
         num_questions = calc_num_questions(num_tokens)
@@ -304,7 +307,7 @@ def generate_flashcards(text, language="english", custom_num_questions=None):
     flashcards_prompt = flashcards_prompt.replace("[NUM_QUESTIONS]", str(num_questions))
 
     # Call the OpenAI API to generate flashcards
-    flashcards = openai_call(flashcards_prompt, model="gpt-4o-mini")
+    flashcards = openai_call(flashcards_prompt, model="gpt-5-mini")
 
     # Clean the output
     flashcards = (
@@ -339,7 +342,7 @@ def generate_tags(text):
     tags_prompt = f"{prompt}\n\n{text}"
 
     # Call the OpenAI API to generate tags
-    tags_response = openai_call(tags_prompt)
+    tags_response = openai_call(tags_prompt, model="gpt-5-nano")
 
     # Convert the response to a list of tags
     tags = tags_response.split(" ")
@@ -586,48 +589,42 @@ def process_books(books):
     """
     logging.info(f"Processing {len(books)} new books...")
     for ebook_path in books:
-        try:
-            # Convert ebook to text
-            book_content = process_book_attachment(ebook_path)
+        # Use the book filename to infer the author and title
+        author_name = openai_call(
+            f"Return just the author name of the book inferred from this filename: {ebook_path}. The answer should ONLY contain the name of the author and nothing else.",
+            model="gpt-5-nano",
+        )
+        logging.info(f"Author name: {author_name}")
+        book_title = openai_call(
+            f"Return just the title of the book inferred from this filename: {ebook_path}. The answer should ONLY contain the name of the book and nothing else.",
+            model="gpt-5-nano",
+        )
+        logging.info(f"Book title: {book_title}")
 
-            # Generate flashcards from the text
-            flashcards = generate_flashcards(book_content)
-            logging.info(f"Created {len(flashcards)} flashcards from the book.")
+        # Convert ebook to text
+        book_content = process_book_attachment(ebook_path)
 
-            # Generate tags for the flashcards
-            tags = generate_tags(flashcards)
-            logging.info(f"Generated tags: {tags}.")
+        # Generate flashcards from the text
+        flashcards = generate_flashcards(book_content)
+        logging.info(f"Created {len(flashcards)} flashcards from the book.")
 
-            # Use the book filename to infer the author and title
-            author_name = openai_call(
-                f"Return just the author name of the book inferred from this filename: {ebook_path}. The answer should ONLY contain the name of the author and nothing else.",
-                model="gpt-4o-mini",
+        # Generate tags for the flashcards
+        tags = generate_tags(flashcards)
+        logging.info(f"Generated tags: {tags}.")
+
+        # Upload the flashcards to Anki
+        for card in flashcards:
+            front = f"<h1>{author_name}</h1><h2>{book_title}</h2><br>{card['question']}"
+            add_anki_card(
+                f"Books::{author_name}",
+                "Basic",
+                front,
+                card["answer"],
+                tags=tags,
             )
-            logging.info(f"Author name: {author_name}")
-            book_title = openai_call(
-                f"Return just the title of the book inferred from this filename: {ebook_path}. The answer should ONLY contain the name of the book and nothing else.",
-                model="gpt-4o-mini",
-            )
-            logging.info(f"Book title: {book_title}")
-
-            # Upload the flashcards to Anki
-            for card in flashcards:
-                front = (
-                    f"<h1>{author_name}</h1><h2>{book_title}</h2><br>{card['question']}"
-                )
-                add_anki_card(
-                    f"Books::{author_name}",
-                    "Basic",
-                    front,
-                    card["answer"],
-                    tags=tags,
-                )
-            logging.info(
-                f"Uploaded flashcards for book '{author_name} - {book_title}' to Anki."
-            )
-
-        except Exception as e:
-            logging.error(f"Error processing book '{ebook_path}': {e}")
+        logging.info(
+            f"Uploaded flashcards for book '{author_name} - {book_title}' to Anki."
+        )
 
 
 def process_documents(documents):
@@ -659,7 +656,7 @@ def process_documents(documents):
                 f"Return the topic or title of this document inferred from this filename: {document_path}."
                 f"\nAnd these flashcards:\n{flashcards}."
                 "\n\nThe answer should ONLY contain the topic or title and nothing else.",
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
             )
             logging.info(f"Topic: {topic}")
 
@@ -869,7 +866,8 @@ def main():
     send_anki_request("sync")
     logging.info("Sync completed!")
 
-    anki_process.kill()
+    if anki_process:
+        anki_process.kill()
 
 
 if __name__ == "__main__":
