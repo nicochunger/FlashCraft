@@ -20,6 +20,7 @@ import re
 import subprocess
 import time
 from threading import Lock
+from typing import Type
 
 # import json_repair
 import requests
@@ -27,6 +28,7 @@ import tiktoken
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
 from openai import OpenAI
+from pydantic import BaseModel
 from werkzeug.utils import secure_filename
 
 from content_types.books import process_book_attachment
@@ -120,6 +122,15 @@ logging.basicConfig(
 # )
 
 
+class Flashcard(BaseModel):
+    question: str
+    answer: str
+
+
+class FlashcardGenerationOutput(BaseModel):
+    flashcards: list[Flashcard]
+
+
 def openai_call(prompt, model=LLM_MODEL):
     """Call the OpenAI API with a given prompt.
 
@@ -141,6 +152,22 @@ def openai_call(prompt, model=LLM_MODEL):
     )
 
     return chat_completion.choices[0].message.content
+
+
+def openai_structured_json_call(
+    prompt: str, response_model: Type[BaseModel], model: str
+) -> BaseModel:
+    """Request structured JSON output parsed into a Pydantic model."""
+    completion = OPENAI_CLIENT.chat.completions.parse(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        response_format=response_model,
+    )
+
+    parsed_message = completion.choices[0].message
+    if not hasattr(parsed_message, "parsed") or parsed_message.parsed is None:
+        raise ValueError("Structured response did not include parsed content.")
+    return parsed_message.parsed
 
 
 def summarize_transcript(transcript):
@@ -214,16 +241,16 @@ def generate_flashcards(text, language="english", custom_num_questions=None):
     logging.info(f"Number of questions to generate: {num_questions}")
     flashcards_prompt = flashcards_prompt.replace("[NUM_QUESTIONS]", str(num_questions))
 
-    # Call the OpenAI API to generate flashcards
-    flashcards = openai_call(flashcards_prompt, model="gpt-5-mini")
-
-    # Clean the output
-    flashcards = (
-        flashcards.replace("```json\n", "").replace("```", "").replace("\n", "").strip()
+    # Call the OpenAI API to generate flashcards with structured output
+    structured_response = openai_structured_json_call(
+        flashcards_prompt,
+        FlashcardGenerationOutput,
+        model="gpt-5-mini",
     )
 
-    # Convert to json
-    flashcards_json = json.loads(flashcards)
+    flashcards_json = [
+        card.model_dump() for card in structured_response.flashcards
+    ]
 
     # Improve the flashcards
     logging.info("Improving flashcards quality...")

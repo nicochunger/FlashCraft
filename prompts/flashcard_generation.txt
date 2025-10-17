@@ -4,9 +4,7 @@ Your task is to analyze the input text and generate [NUM_QUESTIONS] essential fl
 
 No Duplicates: Ensure that each flashcard is unique.
 
-JSON Output Only: Provide only the JSON output for the flashcards without any additional text or formatting. The JSON should be loadable using json.loads in Python.
-
-Structure: Each flashcard should be a dictionary with two keys: "question" and "answer". The JSON should be a list of these dictionaries.
+Structured Output: Produce output that conforms to the structured format requested by the tool (an object containing a `flashcards` array of `{ "question": ..., "answer": ... }` entries) and do not include any surrounding commentary.
 
 Self-Contained Questions: Questions must contain all necessary context for answering them, as there will be no additional information provided. For example, instead of "How was this period called?", write "What was the period between 1939 and 1945 called?".
 
@@ -25,18 +23,5 @@ Educational Objective: The goal is to help the user retain information for long-
 Language: Write all content in [LANGUAGE].
 
 Ignore Sponsorship: Disregard any promotional content or sponsorships in the text.
-
-Here is an example of how the JSON should look:
-
-[
-    {
-        "question": "What is the capital of France?",
-        "answer": "Paris"
-    },
-    {
-        "question": "What is the capital of Germany?",
-        "answer": "Berlin"
-    }
-]
 
 Here is the text you will use to generate the flash cards:
