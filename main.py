@@ -11,8 +11,6 @@
 ## NEW NAME: FlashCraft
 
 import argparse
-import email
-import imaplib
 import json
 import logging
 import math
@@ -21,7 +19,6 @@ import pathlib
 import re
 import subprocess
 import time
-from email.header import decode_header
 from threading import Lock
 
 # import json_repair
@@ -36,6 +33,12 @@ from content_types.books import process_book_attachment
 from content_types.youtube import (
     extract_transcript_from_youtube,
     get_youtube_video_details,
+)
+from email_utils import (
+    check_email,
+    close_email_connection,
+    mark_email_seen,
+    mark_email_unread,
 )
 from start_anki import ensure_anki_running
 
@@ -115,101 +118,6 @@ logging.basicConfig(
 #     ".txt",
 #     ".txtz",
 # )
-
-
-def check_email():
-    """Check the email inbox for unread emails containing YouTube links or book attachments.
-
-    Returns:
-        dict: A dictionary with keys 'youtube' and 'books'.
-            'youtube' is a list of YouTube video IDs extracted from unread emails.
-            'books' is a list of file paths to downloaded .epub or .mobi files.
-    """
-    logging.info("Checking email for content...")
-
-    # Connect to the email server
-    mail = imaplib.IMAP4_SSL(IMAP_SERVER)
-    mail.login(EMAIL, PASSWORD)
-    mail.select("inbox")
-
-    # Search for all unread emails
-    status, messages = mail.search(None, "UNSEEN")
-    email_ids = messages[0].split()
-
-    # Pattern to extract YouTube video ID from either full URL or shortened URL
-    pattern = (
-        r"(?:https?://(?:www\.)?youtube\.com/watch\?v=|https?://youtu\.be/)([\w-]+)"
-    )
-
-    youtube_video_ids = []
-    book_file_paths = []
-    documents_file_paths = []
-
-    for email_id in email_ids:
-        # Fetch the email by ID
-        status, msg_data = mail.fetch(email_id, "(RFC822)")
-        msg = email.message_from_bytes(msg_data[0][1])
-
-        # Get the email subject
-        subject, encoding = decode_header(msg["Subject"])[0]
-        if isinstance(subject, bytes):
-            subject = subject.decode(encoding if encoding else "utf-8")
-
-        # Check if the email contains a YouTube link or book attachments
-        if msg.is_multipart():
-            for part in msg.walk():
-                content_type = part.get_content_type()
-                if content_type == "text/plain":
-                    body = part.get_payload(decode=True).decode()
-                    video_ids = re.findall(pattern, body)
-                    youtube_video_ids.extend(video_ids)
-                elif (
-                    part.get_content_maintype() == "application" and part.get_filename()
-                ):
-                    filename = part.get_filename()
-                    if filename.lower().endswith(("epub", "mobi", ".pdf")):
-                        filepath = DOWNLOADS_DIR / filename
-                        if not DOWNLOADS_DIR.exists():
-                            DOWNLOADS_DIR.mkdir()
-                        with open(filepath, "wb") as f:
-                            f.write(part.get_payload(decode=True))
-                        # Check if the file is a book or a document
-                        if filename.lower().endswith((".epub", ".mobi")):
-                            book_file_paths.append(filepath)
-                        else:
-                            documents_file_paths.append(filepath)
-                    else:
-                        logging.info(
-                            f"Unsupported file format for attachment: {filename}"
-                        )
-        else:
-            body = msg.get_payload(decode=True).decode()
-            video_ids = re.findall(pattern, body)
-            youtube_video_ids.extend(video_ids)
-
-    # Close the connection and logout
-    mail.close()
-    mail.logout()
-
-    logging.info(
-        f"Found {len(email_ids)} unread emails with:"
-        f"\n\t{len(youtube_video_ids)} YouTube links."
-        f"\n\t{len(book_file_paths)} books."
-        f"\n\t{len(documents_file_paths)} documents."
-    )
-    # Remove duplicate video IDs
-    unique_youtube_video_ids = list(set(youtube_video_ids))
-
-    # If there were duplicate video IDs, log the number of duplicates removed
-    if len(unique_youtube_video_ids) < len(youtube_video_ids):
-        logging.info(
-            f"Removed {len(youtube_video_ids) - len(unique_youtube_video_ids)} duplicate video IDs."
-        )
-    return {
-        "youtube": unique_youtube_video_ids,
-        "books": book_file_paths,
-        "documents": documents_file_paths,
-    }
 
 
 def openai_call(prompt, model=LLM_MODEL):
@@ -854,35 +762,55 @@ def process_document():
 
 def main():
     """Main function to execute the application logic."""
-    # Check email for unread YouTube links or book attachments
-    content = check_email()
-    video_ids = content.get("youtube", [])
-    books = content.get("books", [])
-    documents = content.get("documents", [])
+    mail, messages = check_email(IMAP_SERVER, EMAIL, PASSWORD, DOWNLOADS_DIR)
 
-    if not any(content.values()):
+    if not messages:
         logging.info("No new YouTube links or book attachments found.")
+        close_email_connection(mail)
         return
 
     success, anki_process = ensure_anki_running()
     if not success:
+        close_email_connection(mail)
         return
 
-    # Process content and sync
-    send_anki_request("sync")
+    try:
+        send_anki_request("sync")
 
-    if video_ids:
-        process_youtube_videos(video_ids)
-    if books:
-        process_books(books)
-    if documents:
-        process_documents(documents)
+        for message in messages:
+            uid = message.get("uid")
+            subject = message.get("subject", "")
+            logging.info("Processing email UID %s (subject: %s)", uid, subject)
 
-    send_anki_request("sync")
-    logging.info("Sync completed!")
+            try:
+                youtube_ids = message.get("youtube", [])
+                books = message.get("books", [])
+                documents = message.get("documents", [])
 
-    if anki_process:
-        anki_process.kill()
+                if youtube_ids:
+                    process_youtube_videos(youtube_ids)
+                if books:
+                    process_books(books)
+                if documents:
+                    process_documents(documents)
+
+                mark_email_seen(mail, uid)
+                logging.info("Successfully processed email UID %s", uid)
+            except Exception as exc:  # noqa: BLE001
+                logging.exception(
+                    "Failed to process email UID %s (subject: %s): %s",
+                    uid,
+                    subject,
+                    exc,
+                )
+                mark_email_unread(mail, uid)
+
+        send_anki_request("sync")
+        logging.info("Sync completed!")
+    finally:
+        if anki_process:
+            anki_process.kill()
+        close_email_connection(mail)
 
 
 if __name__ == "__main__":
