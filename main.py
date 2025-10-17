@@ -593,13 +593,28 @@ def process_books(books):
         author_name = openai_call(
             f"Return just the author name of the book inferred from this filename: {ebook_path}. The answer should ONLY contain the name of the author and nothing else.",
             model="gpt-5-nano",
-        )
+        ).strip()
         logging.info(f"Author name: {author_name}")
         book_title = openai_call(
             f"Return just the title of the book inferred from this filename: {ebook_path}. The answer should ONLY contain the name of the book and nothing else.",
             model="gpt-5-nano",
-        )
+        ).strip()
         logging.info(f"Book title: {book_title}")
+        short_title_prompt = (
+            "Generate a concise short title for this book.\n"
+            f"Full title: {book_title}\n"
+            "Return ONLY the short title as plain text (no quotation marks, no explanation).\n"
+            "Constraints:\n"
+            "- Remove subtitles and anything after punctuation like ':' or '—' or ' - '.\n"
+            "- Remove parenthetical content, series/volume/edition labels (e.g., 'Volume 1', '2nd ed.').\n"
+            "- Remove generic descriptors like 'A Novel', 'An Introduction', 'Expanded Edition'.\n"
+            "- Limit to a succinct phrase (preferably 8 words or fewer) that preserves the main title.\n"
+            "- Do not include the author or publication metadata."
+        )
+        short_title = openai_call(short_title_prompt, model="gpt-5-nano").strip()
+        if not short_title:
+            short_title = book_title
+        logging.info(f"Short title: {short_title}")
 
         # Convert ebook to text
         book_content = process_book_attachment(ebook_path)
@@ -616,7 +631,7 @@ def process_books(books):
         for card in flashcards:
             front = f"<h1>{author_name}</h1><h2>{book_title}</h2><br>{card['question']}"
             add_anki_card(
-                f"Books::{author_name}",
+                f"Books::{author_name}::{short_title}",
                 "Basic",
                 front,
                 card["answer"],
